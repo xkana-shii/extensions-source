@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Yaoi Manga Online"
-    versionCode = 5
+    versionCode = 6
     contentWarning = ContentWarning.NSFW
     libVersion = "1.4"
 

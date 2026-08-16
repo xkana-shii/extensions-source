@@ -63,8 +63,8 @@ class SearchDto(
         val alternateTitles: List<String> = emptyList(),
     ) {
 
-        fun toSManga(apiUrl: String, showSource: Boolean, sources: Map<String, String>, cleanTitle: Boolean): SManga = SManga.create().apply {
-            title = if (showSource && !sources.isEmpty()) "${this@Book.title.trim()} [${sources[this@Book.sourceId]}]" else this@Book.title.clean(cleanTitle)
+        fun toSManga(apiUrl: String, showSource: Boolean, sources: Map<String, String>): SManga = SManga.create().apply {
+            title = if (showSource && !sources.isEmpty()) "${this@Book.title.trim()} [${sources[this@Book.sourceId]}]" else this@Book.title.trim()
             url = id
             thumbnail_url = coverImage?.let { "$apiUrl/image/$it" }
         }
@@ -88,8 +88,8 @@ class TrackerDto(
         val coverImage: String? = null,
     ) {
 
-        fun toSManga(apiUrl: String, showSource: Boolean, sources: Map<String, String>, cleanTitle: Boolean): SManga = SManga.create().apply {
-            title = if (showSource && !sources.isEmpty()) "${this@Book.title.trim()} [${sources[this@Book.sourceId]}]" else this@Book.title.clean(cleanTitle)
+        fun toSManga(apiUrl: String, showSource: Boolean, sources: Map<String, String>): SManga = SManga.create().apply {
+            title = if (showSource && !sources.isEmpty()) "${this@Book.title.trim()} [${sources[this@Book.sourceId]}]" else this@Book.title.trim()
             url = id
             thumbnail_url = coverImage?.let { "$apiUrl/image/$it" }
         }
@@ -171,12 +171,6 @@ class DetailsDto(
             desc.append("\n")
         }
 
-        // Add source name
-        if (sourceName != null && this@DetailsDto.sourceId != null) {
-            if (desc.isNotEmpty()) desc.append("\n")
-            desc.append("Source: [$sourceName]($baseUrl/sources/${this@DetailsDto.sourceId})\n")
-        }
-
         // Add alternate titles at the end
         if (seriesAlternateTitles.isNotEmpty()) {
             if (desc.isNotEmpty()) desc.append("\n")
@@ -201,6 +195,7 @@ class DetailsDto(
         author = authors.joinToString()
         description = desc.toString().trim()
         genre = buildList {
+            sourceName?.takeIf { it.isNotBlank() }?.let { add(it) }
             this@DetailsDto.format?.takeIf { it.isNotBlank() }?.let { add(it) }
             addAll(genres.map { it.genreName })
         }.joinToString()
@@ -240,7 +235,7 @@ class ChapterDto(
         val volumeNo: String?,
         val groups: List<Group> = emptyList(),
     ) {
-        fun toSChapter(actualSeriesId: String, useSourceChapterNumber: Boolean = false, chapterTitleMode: String = "optional"): SChapter = SChapter.create().apply {
+        fun toSChapter(actualSeriesId: String, useSourceChapterNumber: Boolean = false, chapterTitleMode: String = "smart_vol_chapter"): SChapter = SChapter.create().apply {
             url = "/series/$actualSeriesId/reader/$id"
             name = buildChapterName(chapterTitleMode)
             date_upload = dateFormat.tryParse(createdAt)
@@ -258,7 +253,7 @@ class ChapterDto(
             }
         }
 
-        private fun buildChapterName(mode: String = "optional"): String {
+        private fun buildChapterName(mode: String = "smart_vol_chapter"): String {
             val trimmedTitle = title.trim()
             return when (mode) {
                 "optional" -> {
@@ -288,7 +283,50 @@ class ChapterDto(
                     }
                 }
 
-                else -> trimmedTitle
+                // KNS
+                "smart_vol_chapter" -> {
+                    val volPart = if (!volumeNo.isNullOrBlank()) "Vol.$volumeNo " else ""
+                    val chPart = if (!chapterNo.isNullOrBlank()) "Ch.$chapterNo" else ""
+                    val numPart = "$volPart$chPart".trim()
+
+                    when {
+                        numPart.isEmpty() -> trimmedTitle
+                        trimmedTitle.isEmpty() -> numPart
+                        SMART_KEYWORDS.any { trimmedTitle.contains(it, ignoreCase = true) } -> trimmedTitle
+                        SMART_SEASON_REGEX.matches(trimmedTitle) -> trimmedTitle
+                        SMART_ANY_CHAPTER_REGEX.matches(trimmedTitle) -> trimmedTitle
+                        else -> {
+                            val leadingMatch = SMART_LEADING_NUMBER_REGEX.find(trimmedTitle)
+                            if (leadingMatch != null) {
+                                val leadingNum = leadingMatch.groupValues[1]
+                                val sameNumber = leadingNum.toIntOrNull()?.let { it == chapterNo?.toIntOrNull() }
+                                    ?: (leadingNum == chapterNo)
+                                if (sameNumber) return trimmedTitle
+                            }
+                            "$numPart $trimmedTitle"
+                        }
+                    }
+                }
+
+                else -> {
+                    if (chapterNo.isNullOrBlank()) return trimmedTitle
+                    if (trimmedTitle.isEmpty()) return "Ch.$chapterNo"
+
+                    if (SMART_KEYWORDS.any { trimmedTitle.contains(it, ignoreCase = true) }) return trimmedTitle
+                    if (SMART_SEASON_REGEX.matches(trimmedTitle)) return trimmedTitle
+                    if (SMART_ANY_CHAPTER_REGEX.matches(trimmedTitle)) return trimmedTitle
+
+                    val leadingMatch = SMART_LEADING_NUMBER_REGEX.find(trimmedTitle)
+                    if (leadingMatch != null) {
+                        val leadingNum = leadingMatch.groupValues[1]
+                        val sameNumber = leadingNum.toIntOrNull()?.let { it == chapterNo.toIntOrNull() }
+                            ?: (leadingNum == chapterNo)
+                        if (sameNumber) return trimmedTitle
+                    }
+
+                    "Ch.$chapterNo $trimmedTitle"
+                }
+                // KNS
             }
         }
     }
@@ -297,8 +335,29 @@ class ChapterDto(
     class Group(
         val title: String,
     )
+
     companion object {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.ENGLISH)
+
+        // KNS
+        val SMART_KEYWORDS = listOf(
+            "hiatus", "special episode", "season", "special", "finale",
+            "bonus", "romantasy au", "historical au", "side story",
+            "creator's note", "scheduled break",
+        )
+
+        val SMART_SEASON_REGEX = Regex(
+            "^\\(S\\d+\\)\\s*(Chapter|Episode|Ch|Ep).*",
+            RegexOption.IGNORE_CASE,
+        )
+
+        val SMART_ANY_CHAPTER_REGEX = Regex(
+            "^(Chapter|Ch\\.|Ch|Episode|Ep\\.|Ep)\\s*\\d+.*",
+            RegexOption.IGNORE_CASE,
+        )
+
+        val SMART_LEADING_NUMBER_REGEX = Regex("^(\\d+)(?:[.:\\-\\s].*|$)")
+        // KNS
     }
 }
 

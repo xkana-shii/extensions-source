@@ -6,11 +6,11 @@ plugins {
 
 keiyoushi {
     name = "Cubari"
-    versionCode = 26
+    versionCode = 27
     contentWarning = ContentWarning.SAFE
     libVersion = "1.4"
 
-    listOf("en", "all", "other").forEach {
+    listOf("en", "ja", "ko", "zh", "all", "other").forEach {
         source {
             lang = it
             baseUrl = "https://cubari.moe"
