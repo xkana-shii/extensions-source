@@ -12,7 +12,7 @@ permissions: {}
 
 jobs:
   codeberg:
-    if: "github.repository == 'keiyoushi/extensions-source'"
+    if: "github.repository == 'xkana-shii/extensions-source'"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -27,7 +27,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
       - name: Mirror repository
         run: |
-          git remote add mirror "git@codeberg.org:keiyoushi/extensions-source.git"
+          git remote add mirror "git@codeberg.org:xkana-shii/extensions-source.git"
           git push --force --prune mirror "refs/remotes/origin/main:refs/heads/main"
         env:
           GIT_SSH_COMMAND: "ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git"
