@@ -226,7 +226,7 @@ abstract class Kagane :
 
         val response = client.post(url, body)
         val dto = response.parseAs<SearchDto>()
-        val mangas = dto.content.map { it.toSManga(apiUrl, showSource, sources, cleanTitle) }
+        val mangas = dto.content.map { it.toSManga(apiUrl, showSource, sources) }
         return MangasPage(mangas, hasNextPage = dto.hasNextPage())
     }
 
@@ -303,7 +303,7 @@ abstract class Kagane :
             .parseAs<TrackerDto>()
             .bookSeries
         return series
-            .map { it.toSManga(apiUrl, showSource, sources, cleanTitle) }
+            .map { it.toSManga(apiUrl, showSource, sources) }
     }
 
     // =============================== Pages ================================
@@ -514,18 +514,26 @@ abstract class Kagane :
         private const val DATA_SAVER = "data_saver_default"
 
         private const val CHAPTER_TITLE_MODE = "chapter_title_mode"
-        private const val CHAPTER_TITLE_MODE_DEFAULT = "optional"
+        private const val CHAPTER_TITLE_MODE_DEFAULT = "smart_vol_chapter"
         internal val CHAPTER_TITLE_MODES = arrayOf(
             "optional",
             "always",
             "vol_local",
             "vol_chapter",
+            // KNS
+            "smart_vol_chapter",
+            "smart",
+            // KNS
         )
         internal val CHAPTER_TITLE_MODE_NAMES = arrayOf(
             "Title only (e.g. 'Manga Title' / 'Ch.5')",
             "Ch.X + title (e.g. 'Ch.5 Manga Title')",
             "Vol.X Ch.Y (e.g. 'Vol.1 Ch.5')",
             "Vol.X Ch.Y + title (e.g. 'Vol.1 Ch.5 Manga Title')",
+            // KNS
+            "Smart Vol.X Ch.Y + title",
+            "Smart",
+            // KNS
         )
     }
 

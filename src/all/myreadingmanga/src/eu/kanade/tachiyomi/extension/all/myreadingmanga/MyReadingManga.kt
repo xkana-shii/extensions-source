@@ -1,10 +1,20 @@
 package eu.kanade.tachiyomi.extension.all.myreadingmanga
 
 import android.annotation.SuppressLint
+import android.app.Application
+import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.text.InputType
 import android.webkit.URLUtil
+import android.widget.Toast
+import androidx.preference.EditTextPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.asObservableSuccess
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -14,34 +24,53 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.utils.tryParse
+import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import rx.Observable
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Locale
 
 private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.US)
 
 @Source
-abstract class MyReadingManga : HttpSource() {
+abstract class MyReadingManga :
+    HttpSource(),
+    ConfigurableSource {
 
     private val siteLang: String
         get() = when (lang) {
             "ar" -> "Arabic"
             "id" -> "Indonesia"
             "zh" -> "Chinese"
+            "zh-hant" -> "Traditional-Chinese"
+            "hr" -> "Croatian"
             "en" -> "English"
+            "fil" -> "Filipino"
+            "fr" -> "French"
             "de" -> "German"
+            "hu" -> "Hungarian"
             "it" -> "Italian"
             "ja" -> "Japanese"
             "ko" -> "Korean"
+            "lt" -> "Lithuanian"
+            "fa" -> "Persian"
+            "pl" -> "Polish"
             "pt-BR" -> "Portuguese"
+            "pt" -> "Portuguese"
             "ru" -> "Russian"
+            "sk" -> "Slovak"
             "es" -> "Spanish"
+            "sv" -> "Swedish"
+            "th" -> "Thai"
             "tr" -> "Turkish"
             "vi" -> "Vietnamese"
             else -> lang
@@ -53,6 +82,15 @@ abstract class MyReadingManga : HttpSource() {
     override fun headersBuilder(): Headers.Builder = super.headersBuilder()
         .set("User-Agent", USER_AGENT)
         .add("X-Requested-With", randomString((1..20).random()))
+
+    private val preferences: SharedPreferences = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val credentials: Credential
+        get() = Credential(
+            username = preferences.getString(USERNAME_PREF, "") ?: "",
+            password = preferences.getString(PASSWORD_PREF, "") ?: "",
+        )
+    private data class Credential(val username: String, val password: String)
+
     override val client = network.client.newBuilder()
         .addInterceptor { chain ->
             val request = chain.request()
@@ -62,9 +100,82 @@ abstract class MyReadingManga : HttpSource() {
 
             chain.proceed(request.newBuilder().headers(headers).build())
         }
+        // KNS
+        .addInterceptor(LoginInterceptor())
+        // KNS
         .build()
 
     override val supportsLatest = true
+
+    // KNS
+    private inner class LoginInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val path = request.url.encodedPath
+
+            if (path == "/wp-login.php" || path == "/login" || path == "/login/" || path.startsWith("/login/")) {
+                return chain.proceed(request)
+            }
+
+            val username = credentials.username
+            val password = credentials.password
+
+            val cookies = client.cookieJar.loadForRequest(request.url)
+            val hasLoginCookie = cookies.any { it.name.startsWith("wordpress_logged_in_") }
+
+            if (!hasLoginCookie && username.isNotBlank() && password.isNotBlank()) {
+                val loginBody = FormBody.Builder()
+                    .add("log", username)
+                    .add("pwd", password)
+                    .add("wp-submit", "Log In")
+                    .add("redirect_to", "$baseUrl/")
+                    .add("testcookie", "1")
+                    .build()
+
+                val loginRequest = POST("$baseUrl/wp-login.php", headers, loginBody)
+                chain.proceed(loginRequest).use { loginResponse ->
+                    if (!loginResponse.isSuccessful) {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(
+                                Injekt.get<Application>(),
+                                "MyReadingManga login failed. Please check your credentials.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                }
+            }
+
+            val response = chain.proceed(request)
+            val finalPath = response.request.url.encodedPath
+            if (finalPath == "/login" || finalPath == "/login/" || finalPath.startsWith("/login/")) {
+                response.close()
+                throw IOException("Please log in via extension settings")
+            }
+
+            return response
+        }
+    }
+
+    // Preference Screen
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val usernamePref = EditTextPreference(screen.context).apply {
+            key = USERNAME_PREF
+            title = "Username"
+            summary = "Enter your username"
+        }
+        val passwordPref = EditTextPreference(screen.context).apply {
+            key = PASSWORD_PREF
+            title = "Password"
+            summary = "Enter your password"
+            setOnBindEditTextListener { et ->
+                et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+        }
+        screen.addPreference(usernamePref)
+        screen.addPreference(passwordPref)
+    }
+    // KNS
 
     // Popular - Random
     override fun popularMangaRequest(page: Int): Request {
@@ -85,7 +196,7 @@ abstract class MyReadingManga : HttpSource() {
     override fun latestUpdatesParse(response: Response): MangasPage {
         cacheAssistant()
         val document = response.asJsoup()
-        val mangas = document.select("article").map { element ->
+        val mangas = document.select("article:not(.category-video)").map { element ->
             buildManga(element.selectFirst("a[rel]")!!, element.selectFirst("a.entry-image-link img"))
         }
         val hasNextPage = document.selectFirst("li.pagination-next") != null
@@ -115,7 +226,7 @@ abstract class MyReadingManga : HttpSource() {
     override fun searchMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
         if (document.location().contains("/page/1")) mangaParsedSoFar = 0
-        val mangas = document.select("article").map { element ->
+        val mangas = document.select("article:not(.category-video)").map { element ->
             buildManga(element.selectFirst("a[rel]")!!, element.selectFirst("a.entry-image-link img"))
         }.also { mangaParsedSoFar += it.count() }
         val totalResults = TOTAL_RESULTS_REGEX.find(document.selectFirst(".ep-search-count")?.text() ?: "")?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull() ?: 0
@@ -151,7 +262,7 @@ abstract class MyReadingManga : HttpSource() {
     }
 
     // cleans up the name removing author and language from the title
-    private fun cleanTitle(title: String) = title.replace(TITLE_REGEX, "").substringBeforeLast("(").trim()
+    private fun cleanTitle(title: String) = title.replace(TITLE_REGEX, "").replace(Regex("""\s+"""), " ").trim()
 
     private fun cleanAuthor(author: String) = author.substringAfter("[").substringBefore("]").trim()
 
@@ -180,6 +291,10 @@ abstract class MyReadingManga : HttpSource() {
         status = when (document.selectFirst("a[href*=status]")?.text()) {
             "Ongoing" -> SManga.ONGOING
             "Completed" -> SManga.COMPLETED
+            "Licensed" -> SManga.LICENSED
+            "Dropped" -> SManga.CANCELLED
+            "Discontinued" -> SManga.CANCELLED
+            "Hiatus" -> SManga.ON_HIATUS
             else -> SManga.UNKNOWN
         }
 
@@ -203,7 +318,7 @@ abstract class MyReadingManga : HttpSource() {
 
         val date = dateFormat.tryParse(document.selectFirst(".entry-time")?.text())
         // create first chapter since its on main manga page
-        chapters.add(createChapter("1", document.location(), date, "Part 1"))
+        chapters.add(createChapter("1", document.location(), date, "Ch. 1"))
         // see if there are multiple chapters or not
         val lastChapterNumber = document.select("a[class=page-numbers]").last()?.text()?.toIntOrNull()
         if (lastChapterNumber != null) {
@@ -211,7 +326,7 @@ abstract class MyReadingManga : HttpSource() {
             // so we take the last one and loop it to get all hidden ones.
             // Example: 1 2 3 4 .. 7 8 9 Next
             for (i in 2..lastChapterNumber) {
-                chapters.add(createChapter(i.toString(), document.location(), date, "Part $i"))
+                chapters.add(createChapter(i.toString(), document.location(), date, "Ch. $i"))
             }
         }
         chapters.reverse()
@@ -289,9 +404,14 @@ abstract class MyReadingManga : HttpSource() {
     )
 
     companion object {
+        // KNS
+        private const val USERNAME_PREF = "MYREADINGMANGA_USERNAME"
+        private const val PASSWORD_PREF = "MYREADINGMANGA_PASSWORD"
+
+        // KNS
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
         private val EXTENSION_REGEX = Regex("""\.(jpg|png|jpeg|webp)""")
-        private val TITLE_REGEX = Regex("""\[[^]]*]""")
+        private val TITLE_REGEX = Regex("""^\s*\[[^]]*]\s*|\s*\[[^]]*].*$""")
         private val TOTAL_RESULTS_REGEX = Regex("""([\d,]+)""")
     }
 
