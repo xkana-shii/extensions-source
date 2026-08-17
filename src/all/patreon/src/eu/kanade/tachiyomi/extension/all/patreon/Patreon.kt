@@ -75,8 +75,7 @@ abstract class Patreon :
         return MangasPage(emptyList(), false)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage =
-        getPopularManga(page)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -281,10 +280,9 @@ abstract class Patreon :
         return GET(page.imageUrl!!, imageHeaders)
     }
 
-    override fun getFilterList(data: JsonElement?): FilterList =
-        FilterList(
-            MembershipsOnlyFilter(),
-        )
+    override fun getFilterList(data: JsonElement?): FilterList = FilterList(
+        MembershipsOnlyFilter(),
+    )
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context).apply {
@@ -495,10 +493,9 @@ abstract class Patreon :
         }
     }
 
-    private fun patreonCookie(): String =
-        CookieManager.getInstance()
-            .getCookie(baseUrl)
-            .orEmpty()
+    private fun patreonCookie(): String = CookieManager.getInstance()
+        .getCookie(baseUrl)
+        .orEmpty()
 
     private fun patreonHeaders(
         requireLogin: Boolean = true,
@@ -668,133 +665,117 @@ abstract class Patreon :
         map[page + 1] = cursor
     }
 
-    private fun currentUserMembershipsApiUrl(): String =
-        "$baseUrl/api/current_user" +
-            "?fields%5Buser%5D=" +
-            "&fields%5Bmember%5D=is_free_member%2Cis_free_trial" +
-            "&fields%5Bcampaign%5D=avatar_photo_image_urls%2Ccreation_name%2Cis_nsfw%2Cname%2Cpublished_at%2Curl%2Curl_for_current_user%2Cvanity%2Csummary" +
-            "&include=active_memberships%2Cactive_memberships.campaign" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    private fun currentUserMembershipsApiUrl(): String = "$baseUrl/api/current_user" +
+        "?fields%5Buser%5D=" +
+        "&fields%5Bmember%5D=is_free_member%2Cis_free_trial" +
+        "&fields%5Bcampaign%5D=avatar_photo_image_urls%2Ccreation_name%2Cis_nsfw%2Cname%2Cpublished_at%2Curl%2Curl_for_current_user%2Cvanity%2Csummary" +
+        "&include=active_memberships%2Cactive_memberships.campaign" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
-    private fun exploreSectionsApiUrl(): String =
-        "$baseUrl/api/explore/sections" +
-            "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Ccreation_name%2Csummary%2Cis_nsfw%2Cavatar_photo_url%2Cis_free_member%2Cis_paid_member%2Curl%2Cvanity%2Cprimary_theme_color%2Cmembership_emphasization_preference%2Crecommendation_reason" +
-            "&fields%5Bexplore-section%5D=display_type%2Csection_type%2Ctitle%2Cdescription%2Curl%2Cdisplay_meta" +
-            "&fields%5Bexplore-topic%5D=label%2Cvalue%2Cdisplay_meta" +
-            "&fields%5Bexplore-filter-option%5D=filter_type%2Clabel%2Cvalue" +
-            "&include=items%2Citems.campaign%2Citems.topic%2Cfilter" +
-            "&filter%5Banchor_topic%5D=" +
-            "&filter%5Bselected_topic%5D=" +
-            "&filter%5Binclude_nsfw%5D=true" +
-            "&filter%5Bchurned_campaign_id%5D=null" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    private fun exploreSectionsApiUrl(): String = "$baseUrl/api/explore/sections" +
+        "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Ccreation_name%2Csummary%2Cis_nsfw%2Cavatar_photo_url%2Cis_free_member%2Cis_paid_member%2Curl%2Cvanity%2Cprimary_theme_color%2Cmembership_emphasization_preference%2Crecommendation_reason" +
+        "&fields%5Bexplore-section%5D=display_type%2Csection_type%2Ctitle%2Cdescription%2Curl%2Cdisplay_meta" +
+        "&fields%5Bexplore-topic%5D=label%2Cvalue%2Cdisplay_meta" +
+        "&fields%5Bexplore-filter-option%5D=filter_type%2Clabel%2Cvalue" +
+        "&include=items%2Citems.campaign%2Citems.topic%2Cfilter" +
+        "&filter%5Banchor_topic%5D=" +
+        "&filter%5Bselected_topic%5D=" +
+        "&filter%5Binclude_nsfw%5D=true" +
+        "&filter%5Bchurned_campaign_id%5D=null" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
     private fun loggedInSearchApiUrl(
         query: String,
         cursor: String,
-    ): String =
-        "$baseUrl/api/search_feed/v1/campaign" +
-            "?filter%5Bquery%5D=${query.encode()}" +
-            "&filter%5Bis_for_preview%5D=false" +
-            "&filter%5Binclude_nsfw%5D=true" +
-            "&fields%5Bcampaign%5D=currency%2Cshow_audio_post_download_links%2Cavatar_photo_url%2Cavatar_photo_image_urls%2Cis_nsfw%2Cis_monthly%2Cname%2Csummary%2Curl%2Cpatron_count%2Cprimary_theme_color%2Ccampaign_id%2Ccreation_name%2Cavatar_photo_blurred_url%2Cis_free_member%2Cis_paid_member%2Cmember_count%2Cpost_count%2Cmembership_emphasization_preference%2Cvanity" +
-            "&include=card_campaign.campaign" +
-            "&page%5Bsize%5D=24" +
-            "&page%5Bcursor%5D=${cursor.encode()}" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    ): String = "$baseUrl/api/search_feed/v1/campaign" +
+        "?filter%5Bquery%5D=${query.encode()}" +
+        "&filter%5Bis_for_preview%5D=false" +
+        "&filter%5Binclude_nsfw%5D=true" +
+        "&fields%5Bcampaign%5D=currency%2Cshow_audio_post_download_links%2Cavatar_photo_url%2Cavatar_photo_image_urls%2Cis_nsfw%2Cis_monthly%2Cname%2Csummary%2Curl%2Cpatron_count%2Cprimary_theme_color%2Ccampaign_id%2Ccreation_name%2Cavatar_photo_blurred_url%2Cis_free_member%2Cis_paid_member%2Cmember_count%2Cpost_count%2Cmembership_emphasization_preference%2Cvanity" +
+        "&include=card_campaign.campaign" +
+        "&page%5Bsize%5D=24" +
+        "&page%5Bcursor%5D=${cursor.encode()}" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
     private fun anonymousSearchApiUrl(
         query: String,
         page: Int,
-    ): String =
-        "$baseUrl/api/search" +
-            "?q=${query.encode()}" +
-            "&page%5Bnumber%5D=$page" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false" +
-            "&include=[]"
+    ): String = "$baseUrl/api/search" +
+        "?q=${query.encode()}" +
+        "&page%5Bnumber%5D=$page" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false" +
+        "&include=[]"
 
     private fun postsApiUrl(
         campaignId: String,
-    ): String =
-        "$baseUrl/api/posts" +
-            "?$POSTS_QUERY" +
-            "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
+    ): String = "$baseUrl/api/posts" +
+        "?$POSTS_QUERY" +
+        "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
 
     private fun postApiUrl(
         postId: String,
-    ): String =
-        "$baseUrl/api/posts/${postId.encode()}" +
-            "?$POST_DETAIL_QUERY"
+    ): String = "$baseUrl/api/posts/${postId.encode()}" +
+        "?$POST_DETAIL_QUERY"
 
     private fun campaignApiUrl(
         campaignId: String,
-    ): String =
-        "$baseUrl/api/campaigns/${campaignId.encode()}" +
-            "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Ccurrent_user_is_free_member%2Ccurrent_user_is_teammate_or_owner%2Chas_rss%2Cid%2Cmain_video_embed%2Cmain_video_url%2Cname%2Csummary%2Curl%2Cvanity" +
-            "&fields%5Bconnected_socials%5D=app_name%2Cexternal_profile_url%2Cis_public" +
-            "&fields%5Bpledge%5D=amount_cents" +
-            "&fields%5Buser%5D=id" +
-            "&include=connected_socials%2Ccreator%2Ccurrent_user_pledge" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    ): String = "$baseUrl/api/campaigns/${campaignId.encode()}" +
+        "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Ccurrent_user_is_free_member%2Ccurrent_user_is_teammate_or_owner%2Chas_rss%2Cid%2Cmain_video_embed%2Cmain_video_url%2Cname%2Csummary%2Curl%2Cvanity" +
+        "&fields%5Bconnected_socials%5D=app_name%2Cexternal_profile_url%2Cis_public" +
+        "&fields%5Bpledge%5D=amount_cents" +
+        "&fields%5Buser%5D=id" +
+        "&include=connected_socials%2Ccreator%2Ccurrent_user_pledge" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
-    private fun String.absolutePatreonUrl(): String =
-        when {
-            startsWith("http://") ||
-                startsWith("https://") -> this
+    private fun String.absolutePatreonUrl(): String = when {
+        startsWith("http://") ||
+            startsWith("https://") -> this
 
-            startsWith("/") ->
-                "$baseUrl$this"
+        startsWith("/") ->
+            "$baseUrl$this"
 
-            else ->
-                "$baseUrl/$this"
-        }
+        else ->
+            "$baseUrl/$this"
+    }
 
-    private fun String.extractCampaignIdFromSourceUrl(): String? =
-        CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
-            .find(this)
-            ?.groupValues
-            ?.getOrNull(1)
+    private fun String.extractCampaignIdFromSourceUrl(): String? = CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
+        .find(this)
+        ?.groupValues
+        ?.getOrNull(1)
 
-    private fun String.encode(): String =
-        URLEncoder.encode(
-            this,
-            Charsets.UTF_8.name(),
-        )
+    private fun String.encode(): String = URLEncoder.encode(
+        this,
+        Charsets.UTF_8.name(),
+    )
 
-    private fun String.decodeUrl(): String =
-        URLDecoder.decode(
-            this,
-            Charsets.UTF_8.name(),
-        )
+    private fun String.decodeUrl(): String = URLDecoder.decode(
+        this,
+        Charsets.UTF_8.name(),
+    )
 
-    private fun String.searchCursorKey(): String =
-        trim().lowercase()
+    private fun String.searchCursorKey(): String = trim().lowercase()
 
-    private fun hideLockedChapters(): Boolean =
-        preferences.getBoolean(
-            HIDE_LOCKED_CHAPTERS_PREF,
-            false,
-        )
+    private fun hideLockedChapters(): Boolean = preferences.getBoolean(
+        HIDE_LOCKED_CHAPTERS_PREF,
+        false,
+    )
 
-    private fun String.extractPostIdFromChapterUrl(): String =
-        substringAfterLast("/post/")
-            .substringBefore('/')
-            .substringBefore('?')
+    private fun String.extractPostIdFromChapterUrl(): String = substringAfterLast("/post/")
+        .substringBefore('/')
+        .substringBefore('?')
 
-    private fun String.isLockedChapterUrl(): Boolean =
-        substringAfter('?', "")
-            .split('&')
-            .any { parameter -> parameter == "locked=true" }
+    private fun String.isLockedChapterUrl(): Boolean = substringAfter('?', "")
+        .split('&')
+        .any { parameter -> parameter == "locked=true" }
 
-    private fun FilterList.membershipsOnly(): Boolean =
-        filterIsInstance<MembershipsOnlyFilter>()
-            .firstOrNull()
-            ?.state == true
+    private fun FilterList.membershipsOnly(): Boolean = filterIsInstance<MembershipsOnlyFilter>()
+        .firstOrNull()
+        ?.state == true
 
     private class MembershipsOnlyFilter :
         Filter.CheckBox(

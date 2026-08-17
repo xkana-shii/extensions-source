@@ -109,8 +109,7 @@ class PatreonImageUrls(
     @SerialName("default_large") val defaultLarge: String? = null,
 )
 
-private inline fun <reified T> JsonElement.decodeOrNull(json: Json): T? =
-    runCatching { json.decodeFromJsonElement<T>(this) }.getOrNull()
+private inline fun <reified T> JsonElement.decodeOrNull(json: Json): T? = runCatching { json.decodeFromJsonElement<T>(this) }.getOrNull()
 
 private inline fun <reified T> JsonElement.asList(json: Json): List<T> = when (this) {
     is JsonArray -> mapNotNull { it.decodeOrNull<T>(json) }
@@ -288,9 +287,9 @@ fun PatreonResource.toSManga(
     artist = username
     thumbnail_url = attributes.avatarPhotoUrl
         ?: attributes.avatarPhotoImageUrls.best()
-            ?: attributes.avatarUrl
-            ?: attributes.coverPhotoUrl
-            ?: attributes.coverUrl
+        ?: attributes.avatarUrl
+        ?: attributes.coverPhotoUrl
+        ?: attributes.coverUrl
     description = attributes.summary.htmlToMarkdown().orEmpty()
     initialized = true
 }
@@ -352,8 +351,7 @@ fun PatreonPost.imageUrls(
     return urls.distinct()
 }
 
-fun List<String>.toPages(): List<Page> =
-    mapIndexed { index, url -> Page(index, imageUrl = url) }
+fun List<String>.toPages(): List<Page> = mapIndexed { index, url -> Page(index, imageUrl = url) }
 
 private fun PatreonResource.resolveExploreCampaign(
     includedById: Map<String, PatreonResource>,
@@ -423,12 +421,11 @@ private fun PatreonAttributes.bestImageUrl(): String? {
     }
 }
 
-private fun PatreonAttributes.pageUsername(): String =
-    vanity?.takeIf { it.isNotBlank() }
-        ?: url.usernameFromPatreonUrl()
-        ?: urlForCurrentUser.usernameFromPatreonUrl()
-        ?: name?.takeIf { it.isNotBlank() }
-        ?: "Patreon"
+private fun PatreonAttributes.pageUsername(): String = vanity?.takeIf { it.isNotBlank() }
+    ?: url.usernameFromPatreonUrl()
+    ?: urlForCurrentUser.usernameFromPatreonUrl()
+    ?: name?.takeIf { it.isNotBlank() }
+    ?: "Patreon"
 
 internal fun String?.usernameFromPatreonUrl(): String? {
     if (isNullOrBlank()) return null
@@ -565,8 +562,7 @@ private fun Element.toMarkdownElement(): String {
     }
 }
 
-private fun Element.childrenToMarkdown(): String =
-    childNodes().joinToString("") { node -> node.toMarkdown() }
+private fun Element.childrenToMarkdown(): String = childNodes().joinToString("") { node -> node.toMarkdown() }
 
 private fun Element.markdownHeading(level: Int): String {
     val content = childrenToMarkdown().trim()
@@ -600,40 +596,35 @@ private fun String?.isImageFileName(): Boolean {
     return IMAGE_EXTENSIONS.any { clean.endsWith(it) }
 }
 
-private fun String.isImageUrl(): Boolean =
-    substringBefore('?')
-        .substringBefore('#')
-        .isImageFileName()
+private fun String.isImageUrl(): Boolean = substringBefore('?')
+    .substringBefore('#')
+    .isImageFileName()
 
-private fun String.extractImageUrlsFromHtml(): List<String> =
-    Jsoup.parse(this)
-        .select("img[src], source[srcset]")
-        .flatMap { element ->
-            val src = element.attr("abs:src")
-                .ifBlank { element.attr("src") }
+private fun String.extractImageUrlsFromHtml(): List<String> = Jsoup.parse(this)
+    .select("img[src], source[srcset]")
+    .flatMap { element ->
+        val src = element.attr("abs:src")
+            .ifBlank { element.attr("src") }
 
-            val srcset = element.attr("srcset")
-                .split(',')
-                .map { it.trim().substringBefore(' ') }
+        val srcset = element.attr("srcset")
+            .split(',')
+            .map { it.trim().substringBefore(' ') }
 
-            listOf(src) + srcset
-        }
-        .filter { it.startsWith("http") && it.isImageUrl() }
-        .distinct()
+        listOf(src) + srcset
+    }
+    .filter { it.startsWith("http") && it.isImageUrl() }
+    .distinct()
 
-private fun String.extractImageUrlsFromText(): List<String> =
-    IMAGE_URL_REGEX
-        .findAll(this)
-        .map { it.value.replace("\\/", "/") }
-        .filter { it.isImageUrl() }
-        .distinct()
-        .toList()
+private fun String.extractImageUrlsFromText(): List<String> = IMAGE_URL_REGEX
+    .findAll(this)
+    .map { it.value.replace("\\/", "/") }
+    .filter { it.isImageUrl() }
+    .distinct()
+    .toList()
 
-private fun JsonObject.string(key: String): String? =
-    this[key]?.jsonPrimitive?.contentOrNull
+private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
 
-private fun JsonObject.obj(key: String): JsonObject? =
-    this[key] as? JsonObject
+private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 
 private fun JsonElement?.asString(): String? {
     val primitive = this?.jsonPrimitive ?: return null
@@ -665,19 +656,17 @@ internal fun String?.toSourcePath(baseUrl: String): String {
     }
 }
 
-private fun PatreonImageUrls?.best(): String? =
-    this?.original
-        ?: this?.default
-        ?: this?.large
-        ?: this?.defaultLarge
-        ?: this?.thumbnail
+private fun PatreonImageUrls?.best(): String? = this?.original
+    ?: this?.default
+    ?: this?.large
+    ?: this?.defaultLarge
+    ?: this?.thumbnail
 
-private fun JsonObject.imageUrlsBest(): String? =
-    string("original")
-        ?: string("default")
-        ?: string("large")
-        ?: string("default_large")
-        ?: string("thumbnail")
+private fun JsonObject.imageUrlsBest(): String? = string("original")
+    ?: string("default")
+    ?: string("large")
+    ?: string("default_large")
+    ?: string("thumbnail")
 
 private val IMAGE_EXTENSIONS =
     listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif")
