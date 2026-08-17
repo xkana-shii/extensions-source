@@ -1,7 +1,9 @@
 package eu.kanade.tachiyomi.extension.all.patreon
 
+import android.text.InputType
 import android.webkit.CookieManager
 import androidx.preference.CheckBoxPreference
+import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
@@ -18,9 +20,13 @@ import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
+import keiyoushi.utils.runWebView
+import keiyoushi.utils.toJsonString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -36,6 +42,8 @@ import org.jsoup.Jsoup
 import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 @Suppress("unused")
 @Source
@@ -55,6 +63,8 @@ abstract class Patreon :
 
     private val searchCursorCache: MutableMap<String, MutableMap<Int, String?>> =
         LruCache(SEARCH_CURSOR_CACHE_SIZE)
+
+    private val autoLoginMutex = Mutex()
 
     override fun Headers.Builder.configureHeaders(): Headers.Builder = apply {
         set("User-Agent", USER_AGENT)
@@ -76,7 +86,8 @@ abstract class Patreon :
         return MangasPage(emptyList(), false)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
+    override suspend fun getLatestUpdates(page: Int): MangasPage =
+        getPopularManga(page)
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -85,6 +96,8 @@ abstract class Patreon :
     ): MangasPage {
         if (filters.membershipsOnly()) {
             if (page > 1) return MangasPage(emptyList(), false)
+
+            maybeAutoLogin()
 
             val memberships = fetchCurrentUserMemberships().mangas
             val filteredMemberships = if (query.isBlank()) {
@@ -104,6 +117,8 @@ abstract class Patreon :
             if (page > 1) return MangasPage(emptyList(), false)
             return fetchExploreSections()
         }
+
+        maybeAutoLogin()
 
         if (hasPatreonSession()) {
             tryOrNull {
@@ -145,40 +160,46 @@ abstract class Patreon :
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate = coroutineScope {
-        val campaignId = manga.url.extractCampaignIdFromSourceUrl()
-            ?: resolveCampaignId(manga.url)
+    ): SMangaUpdate {
+        if (fetchChapters) {
+            maybeAutoLogin()
+        }
 
-        val mangaDeferred = if (fetchDetails) {
-            async {
-                fetchCampaignManga(campaignId).apply {
-                    if (manga.title.isNotBlank()) {
-                        title = manga.title
-                    }
+        return coroutineScope {
+            val campaignId = manga.url.extractCampaignIdFromSourceUrl()
+                ?: resolveCampaignId(manga.url)
 
-                    manga.thumbnail_url
-                        ?.takeIf { thumbnail -> thumbnail.isNotBlank() }
-                        ?.let { thumbnail ->
-                            thumbnail_url = thumbnail
+            val mangaDeferred = if (fetchDetails) {
+                async {
+                    fetchCampaignManga(campaignId).apply {
+                        if (manga.title.isNotBlank()) {
+                            title = manga.title
                         }
+
+                        manga.thumbnail_url
+                            ?.takeIf { thumbnail -> thumbnail.isNotBlank() }
+                            ?.let { thumbnail ->
+                                thumbnail_url = thumbnail
+                            }
+                    }
                 }
+            } else {
+                null
             }
-        } else {
-            null
-        }
 
-        val chaptersDeferred = if (fetchChapters) {
-            async {
-                fetchChapters(campaignId)
+            val chaptersDeferred = if (fetchChapters) {
+                async {
+                    fetchChapters(campaignId)
+                }
+            } else {
+                null
             }
-        } else {
-            null
-        }
 
-        SMangaUpdate(
-            manga = mangaDeferred?.await() ?: manga,
-            chapters = chaptersDeferred?.await() ?: chapters,
-        )
+            SMangaUpdate(
+                manga = mangaDeferred?.await() ?: manga,
+                chapters = chaptersDeferred?.await() ?: chapters,
+            )
+        }
     }
 
     private suspend fun fetchChapters(campaignId: String): List<SChapter> {
@@ -240,13 +261,9 @@ abstract class Patreon :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val postId = chapter.url.extractPostIdFromChapterUrl()
+        maybeAutoLogin()
 
-        if (chapter.url.isLockedChapterUrl()) {
-            throw IOException(
-                "This Patreon post is locked. You need a higher membership tier to read it.",
-            )
-        }
+        val postId = chapter.url.extractPostIdFromChapterUrl()
 
         postPagesCache[postId]?.let { cachedUrls ->
             return cachedUrls.toPages()
@@ -302,6 +319,36 @@ abstract class Patreon :
     )
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        EditTextPreference(screen.context).apply {
+            key = AUTO_LOGIN_EMAIL_PREF
+            title = "Patreon email"
+            summary = "Email used for automatic login when your Patreon session expires."
+            setDefaultValue("")
+
+            setOnBindEditTextListener { editText ->
+                editText.inputType =
+                    InputType.TYPE_CLASS_TEXT or
+                        InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+
+                editText.isSingleLine = true
+            }
+        }.let(screen::addPreference)
+
+        EditTextPreference(screen.context).apply {
+            key = AUTO_LOGIN_PASSWORD_PREF
+            title = "Patreon password"
+            summary = "Password used for automatic login. After one failed attempt, automatic login will not try again for 24 hours."
+            setDefaultValue("")
+
+            setOnBindEditTextListener { editText ->
+                editText.inputType =
+                    InputType.TYPE_CLASS_TEXT or
+                        InputType.TYPE_TEXT_VARIATION_PASSWORD
+
+                editText.isSingleLine = true
+            }
+        }.let(screen::addPreference)
+
         ListPreference(screen.context).apply {
             key = POST_PAGES_PREF
             title = "Maximum post pages to load"
@@ -317,6 +364,242 @@ abstract class Patreon :
             summary = "Hide Patreon posts that your current membership cannot view. When disabled, locked posts appear with a 🔒 prefix."
             setDefaultValue(false)
         }.let(screen::addPreference)
+    }
+
+    private suspend fun maybeAutoLogin(): Boolean = autoLoginMutex.withLock {
+        if (hasPatreonSession()) {
+            clearAutoLoginFailure()
+            return@withLock true
+        }
+
+        val email = preferences
+            .getString(AUTO_LOGIN_EMAIL_PREF, "")
+            .orEmpty()
+            .trim()
+
+        val password = preferences
+            .getString(AUTO_LOGIN_PASSWORD_PREF, "")
+            .orEmpty()
+
+        if (email.isBlank() || password.isBlank()) {
+            return@withLock false
+        }
+
+        if (isAutoLoginCoolingDown()) {
+            return@withLock false
+        }
+
+        val success = try {
+            performAutoLogin(email, password)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+
+        if (success && hasPatreonSession()) {
+            CookieManager.getInstance().flush()
+            clearAutoLoginFailure()
+            true
+        } else {
+            markAutoLoginFailure()
+            false
+        }
+    }
+
+    private suspend fun performAutoLogin(
+        email: String,
+        password: String,
+    ): Boolean = runWebView(
+        timeout = AUTO_LOGIN_TIMEOUT_SECONDS.seconds,
+    ) {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        blockImages = true
+        userAgent = USER_AGENT
+
+        var submitted = false
+        var evaluating = false
+
+        poll(AUTO_LOGIN_POLL_INTERVAL_MS.milliseconds) {
+            if (hasPatreonSession()) {
+                resolve(true)
+                return@poll
+            }
+
+            if (evaluating) {
+                return@poll
+            }
+
+            evaluating = true
+
+            val script = if (submitted) {
+                AUTO_LOGIN_CHECK_SCRIPT
+            } else {
+                autoLoginScript(email, password)
+            }
+
+            evaluateJs(script) { rawResult ->
+                evaluating = false
+
+                when (
+                    runCatching {
+                        rawResult.parseAs<String?>()
+                    }.getOrNull()
+                ) {
+                    "submitted" -> submitted = true
+                    "failed" -> resolve(false)
+                }
+            }
+        }
+
+        loadUrl(loginUrl())
+    }
+
+    private fun autoLoginScript(
+        email: String,
+        password: String,
+    ): String {
+        val encodedEmail = email.toJsonString()
+        val encodedPassword = password.toJsonString()
+
+        return """
+            (() => {
+                const email = $encodedEmail;
+                const password = $encodedPassword;
+
+                const emailInput = document.querySelector(
+                    'input[type="email"], input[name="email"], input[autocomplete="email"], input[autocomplete="username"]'
+                );
+
+                const passwordInput = document.querySelector(
+                    'input[type="password"], input[name="password"], input[autocomplete="current-password"]'
+                );
+
+                if (!emailInput || !passwordInput) {
+                    return 'waiting';
+                }
+
+                const setValue = (input, value) => {
+                    const descriptor = Object.getOwnPropertyDescriptor(
+                        HTMLInputElement.prototype,
+                        'value'
+                    );
+
+                    if (descriptor && descriptor.set) {
+                        descriptor.set.call(input, value);
+                    } else {
+                        input.value = value;
+                    }
+
+                    input.dispatchEvent(new Event('input', {
+                        bubbles: true
+                    }));
+
+                    input.dispatchEvent(new Event('change', {
+                        bubbles: true
+                    }));
+                };
+
+                setValue(emailInput, email);
+                setValue(passwordInput, password);
+
+                const remember = Array.from(
+                    document.querySelectorAll('input[type="checkbox"]')
+                ).find((checkbox) => {
+                    const identifier = [
+                        checkbox.name || '',
+                        checkbox.id || '',
+                        checkbox.getAttribute('aria-label') || ''
+                    ].join(' ').toLowerCase();
+
+                    return identifier.includes('remember');
+                });
+
+                if (remember && !remember.checked) {
+                    remember.click();
+                }
+
+                const form = passwordInput.form || emailInput.form;
+
+                let submit = form
+                    ? form.querySelector(
+                        'button[type="submit"], input[type="submit"]'
+                    )
+                    : null;
+
+                if (!submit) {
+                    const root = form || document;
+
+                    submit = Array.from(
+                        root.querySelectorAll('button')
+                    ).find((button) => {
+                        const text = (button.textContent || '')
+                            .trim()
+                            .toLowerCase();
+
+                        return text === 'continue' ||
+                            text === 'log in' ||
+                            text === 'login' ||
+                            text === 'sign in';
+                    });
+                }
+
+                if (submit) {
+                    submit.click();
+                    return 'submitted';
+                }
+
+                if (form && typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                    return 'submitted';
+                }
+
+                return 'waiting';
+            })();
+        """.trimIndent()
+    }
+
+    private fun loginUrl(): String =
+        "$baseUrl/login?ru=%2Fhome"
+
+    private fun isAutoLoginCoolingDown(): Boolean {
+        val lastFailure = preferences.getLong(
+            AUTO_LOGIN_LAST_FAILURE_PREF,
+            0L,
+        )
+
+        if (lastFailure <= 0L) {
+            return false
+        }
+
+        val elapsed = System.currentTimeMillis() - lastFailure
+
+        if (elapsed >= AUTO_LOGIN_COOLDOWN_MS) {
+            clearAutoLoginFailure()
+            return false
+        }
+
+        return true
+    }
+
+    private fun markAutoLoginFailure() {
+        preferences.edit()
+            .putLong(
+                AUTO_LOGIN_LAST_FAILURE_PREF,
+                System.currentTimeMillis(),
+            )
+            .apply()
+    }
+
+    private fun clearAutoLoginFailure() {
+        if (!preferences.contains(AUTO_LOGIN_LAST_FAILURE_PREF)) {
+            return
+        }
+
+        preferences.edit()
+            .remove(AUTO_LOGIN_LAST_FAILURE_PREF)
+            .apply()
     }
 
     private suspend fun fetchCurrentUserMemberships(): MangasPage {
@@ -470,20 +753,22 @@ abstract class Patreon :
         }
     }
 
-    private fun patreonCookie(): String = CookieManager.getInstance()
-        .getCookie(baseUrl)
-        .orEmpty()
+    private fun patreonCookie(): String =
+        CookieManager.getInstance()
+            .getCookie(baseUrl)
+            .orEmpty()
 
-    private fun hasPatreonSession(): Boolean = patreonCookie()
-        .split(';')
-        .any { rawCookie ->
-            val cookie = rawCookie.trim()
-            val separator = cookie.indexOf('=')
+    private fun hasPatreonSession(): Boolean =
+        patreonCookie()
+            .split(';')
+            .any { rawCookie ->
+                val cookie = rawCookie.trim()
+                val separator = cookie.indexOf('=')
 
-            separator > 0 &&
-                cookie.substring(0, separator).trim() == SESSION_COOKIE &&
-                cookie.substring(separator + 1).trim().isNotBlank()
-        }
+                separator > 0 &&
+                    cookie.substring(0, separator).trim() == SESSION_COOKIE &&
+                    cookie.substring(separator + 1).trim().isNotBlank()
+            }
 
     private fun patreonHeaders(
         requireLogin: Boolean = true,
@@ -663,7 +948,8 @@ abstract class Patreon :
         return null
     }
 
-    private fun JsonObject.primitiveString(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+    private fun JsonObject.primitiveString(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull
 
     private suspend fun fetchCampaignManga(campaignId: String): SManga = try {
         val root = getJson<PatreonApiRoot>(
@@ -738,56 +1024,63 @@ abstract class Patreon :
         map[page + 1] = cursor
     }
 
-    private fun currentUserMembershipsApiUrl(): String = "$baseUrl/api/current_user" +
-        "?fields%5Bcampaign%5D=avatar_photo_image_urls%2Cname%2Csummary%2Curl%2Curl_for_current_user%2Cvanity" +
-        "&include=active_memberships%2Cactive_memberships.campaign" +
-        "&json-api-version=1.0" +
-        "&json-api-use-default-includes=false"
+    private fun currentUserMembershipsApiUrl(): String =
+        "$baseUrl/api/current_user" +
+            "?fields%5Bcampaign%5D=avatar_photo_image_urls%2Cname%2Csummary%2Curl%2Curl_for_current_user%2Cvanity" +
+            "&include=active_memberships%2Cactive_memberships.campaign" +
+            "&json-api-version=1.0" +
+            "&json-api-use-default-includes=false"
 
-    private fun exploreSectionsApiUrl(): String = "$baseUrl/api/explore/sections" +
-        "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Csummary%2Cavatar_photo_url%2Curl%2Cvanity" +
-        "&include=items%2Citems.campaign" +
-        "&filter%5Banchor_topic%5D=" +
-        "&filter%5Bselected_topic%5D=" +
-        "&filter%5Binclude_nsfw%5D=true" +
-        "&filter%5Bchurned_campaign_id%5D=null" +
-        "&json-api-version=1.0" +
-        "&json-api-use-default-includes=false"
+    private fun exploreSectionsApiUrl(): String =
+        "$baseUrl/api/explore/sections" +
+            "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Csummary%2Cavatar_photo_url%2Curl%2Cvanity" +
+            "&include=items%2Citems.campaign" +
+            "&filter%5Banchor_topic%5D=" +
+            "&filter%5Bselected_topic%5D=" +
+            "&filter%5Binclude_nsfw%5D=true" +
+            "&filter%5Bchurned_campaign_id%5D=null" +
+            "&json-api-version=1.0" +
+            "&json-api-use-default-includes=false"
 
     private fun loggedInSearchApiUrl(
         query: String,
         cursor: String,
-    ): String = "$baseUrl/api/search_feed/v1/campaign" +
-        "?filter%5Bquery%5D=${query.encode()}" +
-        "&filter%5Bis_for_preview%5D=false" +
-        "&filter%5Binclude_nsfw%5D=true" +
-        "&fields%5Bcampaign%5D=avatar_photo_url%2Cavatar_photo_image_urls%2Cname%2Csummary%2Curl%2Ccampaign_id%2Cvanity" +
-        "&include=card_campaign.campaign" +
-        "&page%5Bsize%5D=24" +
-        "&page%5Bcursor%5D=${cursor.encode()}" +
-        "&json-api-version=1.0" +
-        "&json-api-use-default-includes=false"
+    ): String =
+        "$baseUrl/api/search_feed/v1/campaign" +
+            "?filter%5Bquery%5D=${query.encode()}" +
+            "&filter%5Bis_for_preview%5D=false" +
+            "&filter%5Binclude_nsfw%5D=true" +
+            "&fields%5Bcampaign%5D=avatar_photo_url%2Cavatar_photo_image_urls%2Cname%2Csummary%2Curl%2Ccampaign_id%2Cvanity" +
+            "&include=card_campaign.campaign" +
+            "&page%5Bsize%5D=24" +
+            "&page%5Bcursor%5D=${cursor.encode()}" +
+            "&json-api-version=1.0" +
+            "&json-api-use-default-includes=false"
 
     private fun anonymousSearchApiUrl(
         query: String,
         page: Int,
-    ): String = "$baseUrl/api/search" +
-        "?q=${query.encode()}" +
-        "&page%5Bnumber%5D=$page" +
-        "&json-api-version=1.0" +
-        "&json-api-use-default-includes=false" +
-        "&include=[]"
+    ): String =
+        "$baseUrl/api/search" +
+            "?q=${query.encode()}" +
+            "&page%5Bnumber%5D=$page" +
+            "&json-api-version=1.0" +
+            "&json-api-use-default-includes=false" +
+            "&include=[]"
 
-    private fun postsApiUrl(campaignId: String): String = "$baseUrl/api/posts" +
-        "?$POSTS_QUERY" +
-        "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
+    private fun postsApiUrl(campaignId: String): String =
+        "$baseUrl/api/posts" +
+            "?$POSTS_QUERY" +
+            "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
 
-    private fun postApiUrl(postId: String): String = "$baseUrl/api/posts/${postId.encode()}?$POST_DETAIL_QUERY"
+    private fun postApiUrl(postId: String): String =
+        "$baseUrl/api/posts/${postId.encode()}?$POST_DETAIL_QUERY"
 
-    private fun campaignApiUrl(campaignId: String): String = "$baseUrl/api/campaigns/${campaignId.encode()}" +
-        "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Cname%2Csummary%2Curl%2Cvanity" +
-        "&json-api-version=1.0" +
-        "&json-api-use-default-includes=false"
+    private fun campaignApiUrl(campaignId: String): String =
+        "$baseUrl/api/campaigns/${campaignId.encode()}" +
+            "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Cname%2Csummary%2Curl%2Cvanity" +
+            "&json-api-version=1.0" +
+            "&json-api-use-default-includes=false"
 
     private fun String.absolutePatreonUrl(): String = when {
         startsWith("http://") || startsWith("https://") -> this
@@ -795,32 +1088,36 @@ abstract class Patreon :
         else -> "$baseUrl/$this"
     }
 
-    private fun String.extractCampaignIdFromSourceUrl(): String? = CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
-        .find(this)
-        ?.groupValues
-        ?.getOrNull(1)
+    private fun String.extractCampaignIdFromSourceUrl(): String? =
+        CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
 
-    private fun String.encode(): String = URLEncoder.encode(this, Charsets.UTF_8.name())
+    private fun String.encode(): String =
+        URLEncoder.encode(this, Charsets.UTF_8.name())
 
-    private fun String.decodeUrl(): String = URLDecoder.decode(this, Charsets.UTF_8.name())
+    private fun String.decodeUrl(): String =
+        URLDecoder.decode(this, Charsets.UTF_8.name())
 
-    private fun String.searchCursorKey(): String = trim().lowercase()
+    private fun String.searchCursorKey(): String =
+        trim().lowercase()
 
-    private fun hideLockedChapters(): Boolean = preferences.getBoolean(HIDE_LOCKED_CHAPTERS_PREF, false)
+    private fun hideLockedChapters(): Boolean =
+        preferences.getBoolean(HIDE_LOCKED_CHAPTERS_PREF, false)
 
-    private fun String.extractPostIdFromChapterUrl(): String = substringAfterLast("/post/")
-        .substringBefore('/')
-        .substringBefore('?')
+    private fun String.extractPostIdFromChapterUrl(): String =
+        substringAfterLast("/post/")
+            .substringBefore('/')
+            .substringBefore('?')
 
-    private fun String.isLockedChapterUrl(): Boolean = substringAfter('?', "")
-        .split('&')
-        .any { parameter -> parameter == "locked=true" }
+    private fun FilterList.membershipsOnly(): Boolean =
+        filterIsInstance<MembershipsOnlyFilter>()
+            .firstOrNull()
+            ?.state == true
 
-    private fun FilterList.membershipsOnly(): Boolean = filterIsInstance<MembershipsOnlyFilter>()
-        .firstOrNull()
-        ?.state == true
-
-    private class MembershipsOnlyFilter : Filter.CheckBox("Only memberships", false)
+    private class MembershipsOnlyFilter :
+        Filter.CheckBox("Only memberships", false)
 
     private class LruCache<K, V>(
         private val maxEntries: Int,
@@ -832,10 +1129,19 @@ abstract class Patreon :
     }
 
     companion object {
+        private const val AUTO_LOGIN_EMAIL_PREF = "PATREON_AUTO_LOGIN_EMAIL"
+        private const val AUTO_LOGIN_PASSWORD_PREF = "PATREON_AUTO_LOGIN_PASSWORD"
+        private const val AUTO_LOGIN_LAST_FAILURE_PREF = "PATREON_AUTO_LOGIN_LAST_FAILURE"
+
         private const val POST_PAGES_PREF = "PATREON_POST_PAGES"
         private const val HIDE_LOCKED_CHAPTERS_PREF = "PATREON_HIDE_LOCKED_CHAPTERS"
         private const val POST_PAGES_DEFAULT = "5"
+
         private const val SESSION_COOKIE = "session_id"
+
+        private const val AUTO_LOGIN_TIMEOUT_SECONDS = 30
+        private const val AUTO_LOGIN_POLL_INTERVAL_MS = 500L
+        private const val AUTO_LOGIN_COOLDOWN_MS = 24L * 60L * 60L * 1000L
 
         private val POST_PAGE_OPTIONS =
             (5..75 step 5).map { option -> option.toString() }.toTypedArray()
@@ -845,6 +1151,38 @@ abstract class Patreon :
 
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
+
+        private val AUTO_LOGIN_CHECK_SCRIPT = """
+            (() => {
+                const invalidInput = document.querySelector(
+                    'input[type="email"][aria-invalid="true"], input[type="password"][aria-invalid="true"]'
+                );
+
+                if (invalidInput) {
+                    return 'failed';
+                }
+
+                const alerts = Array.from(
+                    document.querySelectorAll('[role="alert"], [aria-live="assertive"]')
+                )
+                    .map((element) => (element.textContent || '').trim())
+                    .filter(Boolean)
+                    .join(' ')
+                    .toLowerCase();
+
+                if (
+                    alerts.includes('incorrect password') ||
+                    alerts.includes('wrong password') ||
+                    alerts.includes('invalid password') ||
+                    alerts.includes('invalid email') ||
+                    alerts.includes('try again')
+                ) {
+                    return 'failed';
+                }
+
+                return 'waiting';
+            })();
+        """.trimIndent()
 
         private const val POSTS_QUERY =
             "include=attachments%2Cattachments_media%2Cimages%2Cmedia" +
