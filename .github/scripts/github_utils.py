@@ -1,7 +1,7 @@
 import subprocess
 import time
 
-REPO_NAME = "xkana-shii/manga-repo"
+REPO_NAME = "xkana-shii/extensions"
 RETRY_ATTEMPTS = 4
 RETRY_BASE_DELAY = 60
 

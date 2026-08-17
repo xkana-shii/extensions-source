@@ -18,7 +18,7 @@ ARTIFACTS_DIR = Path.home() / "apk-artifacts"
 # The checked-out `repo` branch we publish into (the working directory).
 REPO_DIR = Path.cwd()
 
-ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/xkana-shii/tachiyomi-extensions@main"
+ICON_BASE_URL = "https://cdn.jsdelivr.net/gh/xkana-shii/extensions-source@main"
 RELEASE_BASE_URL = f"https://github.com/{REPO_NAME}/releases/download"
 ASSET_LIMIT = 495  # Actual limit is 1000 but we upload 2 items per extension.
 UPLOAD_CHUNK_SIZE = 80
