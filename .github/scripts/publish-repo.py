@@ -187,8 +187,8 @@ index = index_pb2.Index(
     badgeLabel="KNS",
     signingKey="0df5b32b5dba0c61eae08fa46394585f1146c44b166e8ef6e5b7de37106026e3",
     contact=index_pb2.Contact(
-        website="",
-        discord="",
+        website="https://keiyoushi.github.io",
+        discord="https://discord.gg/3FbCpdKbdY",
     ),
     extensionList=index_pb2.ExtensionList(extensions=final_extensions),
 )
