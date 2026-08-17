@@ -19,4 +19,8 @@ keiyoushi {
         lang = "ko"
         baseUrl = "https://www.lezhin.com"
     }
+
+    deeplink {
+        path("/../comic/..*")
+    }
 }

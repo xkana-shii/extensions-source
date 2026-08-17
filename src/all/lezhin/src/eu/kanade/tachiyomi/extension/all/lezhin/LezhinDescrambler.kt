@@ -3,132 +3,283 @@ package eu.kanade.tachiyomi.extension.all.lezhin
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Rect
 import java.io.ByteArrayOutputStream
-import kotlin.math.max
+import kotlin.math.floor
 import kotlin.math.sqrt
 
 object LezhinDescrambler {
 
-    fun descramble(input: ByteArray, episodeId: Int, numColAndRows: Int = 5): ByteArray {
-        val bmp = try {
-            BitmapFactory.decodeByteArray(input, 0, input.size)
+    fun descramble(
+        input: ByteArray,
+        episodeId: Int,
+        gridSize: Int = 5,
+    ): ByteArray {
+        val bitmap = try {
+            BitmapFactory.decodeByteArray(
+                input,
+                0,
+                input.size,
+            )
         } catch (_: Throwable) {
             null
         } ?: return input
 
-        val width = bmp.width
-        val height = bmp.height
-
-        val order = try {
-            generateOrder(episodeId.toLong(), numColAndRows)
+        val permutation = try {
+            generatePermutation(
+                episodeId = episodeId,
+                gridSize = gridSize,
+            )
         } catch (_: Throwable) {
-            null
-        }
-        if (order == null || order.isEmpty()) {
-            bmp.recycle()
+            bitmap.recycle()
             return input
         }
 
         val pieces = try {
-            calculatePieces(width, height, numColAndRows, order)
+            getPieces(
+                imageWidth = bitmap.width,
+                imageHeight = bitmap.height,
+                permutation = permutation,
+            )
         } catch (_: Throwable) {
-            emptyList()
-        }
-
-        val unscrambled = try {
-            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        } catch (_: Throwable) {
-            bmp.recycle()
+            bitmap.recycle()
             return input
         }
 
-        val canvas = Canvas(unscrambled)
+        val output = try {
+            Bitmap.createBitmap(
+                bitmap.width,
+                bitmap.height,
+                Bitmap.Config.ARGB_8888,
+            )
+        } catch (_: Throwable) {
+            bitmap.recycle()
+            return input
+        }
 
-        for (p in pieces) {
-            try {
-                val from = p.from
-                val to = p.to
-                if (from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0) continue
-                if (from.left < 0 || from.top < 0) continue
-                if (from.left + from.width > width || from.top + from.height > height) continue
-                val pieceBitmap = Bitmap.createBitmap(bmp, from.left, from.top, from.width, from.height)
-                canvas.drawBitmap(pieceBitmap, to.left.toFloat(), to.top.toFloat(), null)
-                pieceBitmap.recycle()
-            } catch (_: Throwable) {
-                unscrambled.recycle()
-                bmp.recycle()
-                return input
+        val canvas = Canvas(output)
+
+        try {
+            pieces.forEach { piece ->
+                val source = piece.to
+                val destination = piece.from
+
+                canvas.drawBitmap(
+                    bitmap,
+                    Rect(
+                        source.left,
+                        source.top,
+                        source.left + source.width,
+                        source.top + source.height,
+                    ),
+                    Rect(
+                        destination.left,
+                        destination.top,
+                        destination.left + destination.width,
+                        destination.top + destination.height,
+                    ),
+                    null,
+                )
+            }
+        } catch (_: Throwable) {
+            output.recycle()
+            bitmap.recycle()
+            return input
+        }
+
+        val result = ByteArrayOutputStream().use { stream ->
+            val success = output.compress(
+                Bitmap.CompressFormat.PNG,
+                100,
+                stream,
+            )
+
+            if (success) {
+                stream.toByteArray()
+            } else {
+                input
             }
         }
 
-        val os = ByteArrayOutputStream()
-        val ok = unscrambled.compress(Bitmap.CompressFormat.PNG, 100, os)
-        val out = if (ok) os.toByteArray() else input
-        os.close()
-        unscrambled.recycle()
-        bmp.recycle()
-        return out
+        output.recycle()
+        bitmap.recycle()
+
+        return result
     }
 
-    private fun generateOrder(seed: Long, numColAndRows: Int): IntArray {
-        val numPieces = numColAndRows * numColAndRows
-        val order = IntArray(numPieces) { it }
-        var state = seed and -1L
-        fun rnd(t: Int): Int {
-            var e = state
-            e = e xor (e ushr 12)
-            e = e xor ((e shl 25) and -1L)
-            e = e xor (e ushr 27)
-            state = e and -1L
-            return (((e ushr 32) % t).toInt()).let { if (it < 0) -it else it }
+    private fun generatePermutation(
+        episodeId: Int,
+        gridSize: Int,
+    ): IntArray {
+        val totalTiles =
+            gridSize * gridSize
+
+        val indices =
+            IntArray(totalTiles) { it }
+
+        var state =
+            episodeId.toLong()
+
+        fun next(modulo: Int): Int {
+            state =
+                state xor
+                (state ushr 12)
+
+            state =
+                state xor
+                (state shl 25)
+
+            state =
+                state xor
+                (state ushr 27)
+
+            return (
+                (state ushr 32) %
+                    modulo.toLong()
+                ).toInt()
         }
-        for (i in order.indices) {
-            val s = rnd(numPieces)
-            val u = order[i]
-            order[i] = order[s]
-            order[s] = u
+
+        for (i in indices.indices) {
+            val j = next(totalTiles)
+
+            val value = indices[i]
+
+            indices[i] = indices[j]
+            indices[j] = value
         }
-        return order
+
+        return indices
     }
 
-    private data class PieceRect(val left: Int, val top: Int, val width: Int, val height: Int)
-    private data class Piece(val from: PieceRect, val to: PieceRect)
+    private fun getPieces(
+        imageWidth: Int,
+        imageHeight: Int,
+        permutation: IntArray,
+    ): List<PieceData> {
+        val indexedPermutation =
+            permutation
+                .toMutableList()
+                .apply {
+                    add(size)
+                    add(size + 1)
+                }
 
-    private fun calculatePieces(imageW: Int, imageH: Int, numColAndRows: Int, scrambleTable: IntArray): List<Piece> {
-        val arr = scrambleTable.toMutableList()
-        arr.add(arr.size)
-        arr.add(arr.size + 1)
-        val arrayLength = max(1, kotlin.math.floor(sqrt(arr.size.toDouble())).toInt())
-        val pieces = mutableListOf<Piece>()
-        for (idx in arr.indices) {
-            val fromIndex = idx
-            val toIndex = arr[idx]
-            val fromRect = computePieceRect(imageW, imageH, arrayLength, fromIndex) ?: continue
-            val toRect = computePieceRect(imageW, imageH, arrayLength, toIndex) ?: continue
-            pieces.add(Piece(fromRect, toRect))
-        }
-        return pieces
-    }
+        val gridSize = floor(
+            sqrt(
+                indexedPermutation
+                    .size
+                    .toDouble(),
+            ),
+        ).toInt()
 
-    private fun computePieceRect(w: Int, h: Int, num: Int, pieceIndex: Int): PieceRect? {
-        val numPieces = num * num
-        return when {
-            pieceIndex < numPieces -> {
-                val pw = w / num
-                val ph = h / num
-                val left = (pieceIndex % num) * pw
-                val top = (pieceIndex / num) * ph
-                if (pw <= 0 || ph <= 0) return null
-                PieceRect(left, top, pw, ph)
+        return indexedPermutation
+            .mapIndexedNotNull { fromIndex, toIndex ->
+                val from =
+                    getTileBounds(
+                        imageWidth = imageWidth,
+                        imageHeight = imageHeight,
+                        gridSize = gridSize,
+                        tileIndex = fromIndex,
+                    )
+                        ?: return@mapIndexedNotNull null
+
+                val to =
+                    getTileBounds(
+                        imageWidth = imageWidth,
+                        imageHeight = imageHeight,
+                        gridSize = gridSize,
+                        tileIndex = toIndex,
+                    )
+                        ?: return@mapIndexedNotNull null
+
+                PieceData(
+                    from = from,
+                    to = to,
+                )
             }
-            pieceIndex == numPieces -> {
-                val remW = w % num
-                if (remW == 0) null else PieceRect(w - remW, 0, remW, h)
-            }
-            else -> {
-                val remH = h % num
-                if (remH == 0) null else PieceRect(0, h - remH, w - w % num, remH)
-            }
-        }
     }
+
+    private fun getTileBounds(
+        imageWidth: Int,
+        imageHeight: Int,
+        gridSize: Int,
+        tileIndex: Int,
+    ): Piece? {
+        val totalTiles =
+            gridSize * gridSize
+
+        if (tileIndex < totalTiles) {
+            val tileWidth =
+                imageWidth / gridSize
+
+            val tileHeight =
+                imageHeight / gridSize
+
+            if (
+                tileWidth <= 0 ||
+                tileHeight <= 0
+            ) {
+                return null
+            }
+
+            return Piece(
+                left =
+                (tileIndex % gridSize) *
+                    tileWidth,
+                top =
+                (tileIndex / gridSize) *
+                    tileHeight,
+                width = tileWidth,
+                height = tileHeight,
+            )
+        }
+
+        if (tileIndex == totalTiles) {
+            val remainderWidth =
+                imageWidth % gridSize
+
+            if (remainderWidth == 0) {
+                return null
+            }
+
+            return Piece(
+                left =
+                imageWidth -
+                    remainderWidth,
+                top = 0,
+                width = remainderWidth,
+                height = imageHeight,
+            )
+        }
+
+        val remainderHeight =
+            imageHeight % gridSize
+
+        if (remainderHeight == 0) {
+            return null
+        }
+
+        return Piece(
+            left = 0,
+            top =
+            imageHeight -
+                remainderHeight,
+            width =
+            imageWidth -
+                imageWidth % gridSize,
+            height = remainderHeight,
+        )
+    }
+
+    private class Piece(
+        val left: Int,
+        val top: Int,
+        val width: Int,
+        val height: Int,
+    )
+
+    private class PieceData(
+        val from: Piece,
+        val to: Piece,
+    )
 }
