@@ -70,7 +70,7 @@ def get_icon_url(module: str, theme: str | None) -> str:
     return f"{ICON_BASE_URL}/core/src/main/{ICON_FILE}"
 
 
-for info_file in ARTIFACTS_DIR.glob("**/keiyoushi-source-info.json"):
+for info_file in ARTIFACTS_DIR.glob("**/xkana-shii-source-info.json"):
     with info_file.open(encoding="utf-8") as f:
         info = json.load(f)
     package_name = info["packageName"]
@@ -249,7 +249,7 @@ def create_release(tag: str):
         "--title",
         f"Repository Update {tag}",
         "--notes",
-        f"Automated update from keiyoushi/extensions-source@{current_sha}",
+        f"Automated update from xkana-shii/extensions-source@{current_sha}",
     )
 
 
