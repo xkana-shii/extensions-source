@@ -17,24 +17,23 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
-import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.TimeZone
+import kotlin.time.Instant
 
 @Serializable
-data class PatreonApiRoot(
+class PatreonApiRoot(
     val data: JsonElement = JsonArray(emptyList()),
     val included: List<PatreonResource> = emptyList(),
     val links: PatreonLinks? = null,
 )
 
 @Serializable
-data class PatreonLinks(
+class PatreonLinks(
     val next: String? = null,
 )
 
 @Serializable
-data class PatreonResource(
+class PatreonResource(
     val id: String,
     val type: String? = null,
     val attributes: PatreonAttributes = PatreonAttributes(),
@@ -44,13 +43,12 @@ data class PatreonResource(
 typealias PatreonPost = PatreonResource
 
 @Serializable
-data class PatreonResourceRef(
+class PatreonResourceRef(
     val id: String,
-    val type: String? = null,
 )
 
 @Serializable
-data class PatreonRelationships(
+class PatreonRelationships(
     @SerialName("active_memberships") val activeMemberships: PatreonRelationship? = null,
     @SerialName("attachments_media") val attachmentsMedia: PatreonRelationship? = null,
     @SerialName("card_campaign") val cardCampaign: PatreonRelationship? = null,
@@ -58,18 +56,15 @@ data class PatreonRelationships(
     val images: PatreonRelationship? = null,
     val campaign: PatreonRelationship? = null,
     val items: PatreonRelationship? = null,
-    val topic: PatreonRelationship? = null,
-    val filter: PatreonRelationship? = null,
-    val user: PatreonRelationship? = null,
 )
 
 @Serializable
-data class PatreonRelationship(
+class PatreonRelationship(
     val data: JsonElement? = null,
 )
 
 @Serializable
-data class PatreonAttributes(
+class PatreonAttributes(
     val name: String? = null,
     val title: String? = null,
     val url: String? = null,
@@ -77,54 +72,36 @@ data class PatreonAttributes(
     val vanity: String? = null,
     val summary: String? = null,
     val content: String? = null,
-    val description: String? = null,
-    val embed: JsonElement? = null,
     val image: PatreonImage? = null,
     @SerialName("content_json_string") val contentJsonString: String? = null,
     @SerialName("current_user_can_view") val currentUserCanView: Boolean? = null,
-    @SerialName("current_user_is_free_member") val currentUserIsFreeMember: Boolean? = null,
-    @SerialName("current_user_is_teammate_or_owner") val currentUserIsTeammateOrOwner: Boolean? = null,
     @SerialName("published_at") val publishedAt: String? = null,
-    @SerialName("patreon_url") val patreonUrl: String? = null,
     @SerialName("post_file") val postFile: PatreonPostFile? = null,
     @SerialName("download_url") val downloadUrl: String? = null,
     @SerialName("file_name") val fileName: String? = null,
     @SerialName("image_urls") val imageUrls: PatreonImageUrls? = null,
     @SerialName("avatar_photo_url") val avatarPhotoUrl: String? = null,
     @SerialName("avatar_photo_image_urls") val avatarPhotoImageUrls: PatreonImageUrls? = null,
-    @SerialName("avatar_photo_blurred_url") val avatarPhotoBlurredUrl: String? = null,
     @SerialName("avatar_url") val avatarUrl: String? = null,
     @SerialName("cover_photo_url") val coverPhotoUrl: String? = null,
     @SerialName("cover_url") val coverUrl: String? = null,
     @SerialName("campaign_id") val campaignId: JsonElement? = null,
-    @SerialName("creation_name") val creationName: String? = null,
-    @SerialName("post_count") val postCount: Int? = null,
-    @SerialName("member_count") val memberCount: Int? = null,
-    @SerialName("patron_count") val patronCount: Int? = null,
-    @SerialName("is_nsfw") val isNsfw: Boolean? = null,
-    @SerialName("is_free_member") val isFreeMember: Boolean? = null,
-    @SerialName("is_paid_member") val isPaidMember: Boolean? = null,
-    @SerialName("is_free_trial") val isFreeTrial: Boolean? = null,
-    @SerialName("has_rss") val hasRss: Boolean? = null,
-    @SerialName("main_video_embed") val mainVideoEmbed: String? = null,
-    @SerialName("main_video_url") val mainVideoUrl: String? = null,
-    @SerialName("recommendation_reason") val recommendationReason: String? = null,
 )
 
 @Serializable
-data class PatreonImage(
+class PatreonImage(
     val url: String? = null,
     @SerialName("large_url") val largeUrl: String? = null,
 )
 
 @Serializable
-data class PatreonPostFile(
+class PatreonPostFile(
     val name: String? = null,
     val url: String? = null,
 )
 
 @Serializable
-data class PatreonImageUrls(
+class PatreonImageUrls(
     val original: String? = null,
     val default: String? = null,
     val large: String? = null,
@@ -132,7 +109,8 @@ data class PatreonImageUrls(
     @SerialName("default_large") val defaultLarge: String? = null,
 )
 
-private inline fun <reified T> JsonElement.decodeOrNull(json: Json): T? = runCatching { json.decodeFromJsonElement<T>(this) }.getOrNull()
+private inline fun <reified T> JsonElement.decodeOrNull(json: Json): T? =
+    runCatching { json.decodeFromJsonElement<T>(this) }.getOrNull()
 
 private inline fun <reified T> JsonElement.asList(json: Json): List<T> = when (this) {
     is JsonArray -> mapNotNull { it.decodeOrNull<T>(json) }
@@ -149,9 +127,15 @@ fun PatreonApiRoot.dataResource(json: Json): PatreonResource = when (data) {
 
 private fun JsonElement.asResourceList(json: Json): List<PatreonResource> = asList(json)
 
-private fun relationshipRefs(relationship: PatreonRelationship?, json: Json): List<PatreonResourceRef> = relationship?.data?.asList(json) ?: emptyList()
+private fun relationshipRefs(
+    relationship: PatreonRelationship?,
+    json: Json,
+): List<PatreonResourceRef> = relationship?.data?.asList(json) ?: emptyList()
 
-private fun relationshipRef(relationship: PatreonRelationship?, json: Json): PatreonResourceRef? = (relationship?.data as? JsonObject)?.decodeOrNull(json)
+private fun relationshipRef(
+    relationship: PatreonRelationship?,
+    json: Json,
+): PatreonResourceRef? = (relationship?.data as? JsonObject)?.decodeOrNull(json)
 
 fun PatreonApiRoot.currentUserMembershipResults(json: Json): List<SManga> {
     val includedById = included.associateBy { it.id }
@@ -212,7 +196,7 @@ fun PatreonApiRoot.searchFeedCampaignResults(json: Json): List<SManga> {
     }.distinctBy { it.url }
 }
 
-fun PatreonApiRoot.searchResults(json: Json, baseUrl: String): List<SManga> {
+fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
     val includedById = included.associateBy { it.id }
 
     val elements = when (data) {
@@ -292,7 +276,10 @@ fun PatreonApiRoot.searchResults(json: Json, baseUrl: String): List<SManga> {
     }.distinctBy { it.url }
 }
 
-fun PatreonResource.toSManga(campaignId: String, fallbackName: String = ""): SManga = SManga.create().apply {
+fun PatreonResource.toSManga(
+    campaignId: String,
+    fallbackName: String = "",
+): SManga = SManga.create().apply {
     val username = attributes.pageUsername()
 
     url = "/campaign/$campaignId"
@@ -301,14 +288,17 @@ fun PatreonResource.toSManga(campaignId: String, fallbackName: String = ""): SMa
     artist = username
     thumbnail_url = attributes.avatarPhotoUrl
         ?: attributes.avatarPhotoImageUrls.best()
-        ?: attributes.avatarUrl
-        ?: attributes.coverPhotoUrl
-        ?: attributes.coverUrl
+            ?: attributes.avatarUrl
+            ?: attributes.coverPhotoUrl
+            ?: attributes.coverUrl
     description = attributes.summary.htmlToMarkdown().orEmpty()
     initialized = true
 }
 
-fun PatreonPost.toSChapter(campaignId: String, locked: Boolean = false): SChapter = SChapter.create().apply {
+fun PatreonPost.toSChapter(
+    campaignId: String,
+    locked: Boolean = false,
+): SChapter = SChapter.create().apply {
     url = "/campaign/$campaignId/post/$id" + if (locked) "?locked=true" else ""
 
     val rawName = attributes.title?.takeIf { it.isNotBlank() } ?: "Post $id"
@@ -320,7 +310,10 @@ fun PatreonPost.toSChapter(campaignId: String, locked: Boolean = false): SChapte
 
 fun PatreonPost.isLocked(): Boolean = attributes.currentUserCanView == false
 
-fun PatreonPost.imageUrls(root: PatreonApiRoot, json: Json): List<String> {
+fun PatreonPost.imageUrls(
+    root: PatreonApiRoot,
+    json: Json,
+): List<String> {
     if (attributes.currentUserCanView == false) return emptyList()
 
     val includedById = root.included.associateBy { it.id }
@@ -359,7 +352,8 @@ fun PatreonPost.imageUrls(root: PatreonApiRoot, json: Json): List<String> {
     return urls.distinct()
 }
 
-fun List<String>.toPages(): List<Page> = mapIndexed { index, url -> Page(index, imageUrl = url) }
+fun List<String>.toPages(): List<Page> =
+    mapIndexed { index, url -> Page(index, imageUrl = url) }
 
 private fun PatreonResource.resolveExploreCampaign(
     includedById: Map<String, PatreonResource>,
@@ -421,16 +415,20 @@ private fun PatreonAttributes.bestImageUrl(): String? {
         imageUrls?.defaultLarge,
         imageUrls?.thumbnail,
     )
+
     val trustFirstCandidate = fileName.isImageFileName()
 
-    return candidates.firstOrNull { url -> trustFirstCandidate || url.isImageUrl() }
+    return candidates.firstOrNull { url ->
+        trustFirstCandidate || url.isImageUrl()
+    }
 }
 
-private fun PatreonAttributes.pageUsername(): String = vanity?.takeIf { it.isNotBlank() }
-    ?: url.usernameFromPatreonUrl()
-    ?: urlForCurrentUser.usernameFromPatreonUrl()
-    ?: name?.takeIf { it.isNotBlank() }
-    ?: "Patreon"
+private fun PatreonAttributes.pageUsername(): String =
+    vanity?.takeIf { it.isNotBlank() }
+        ?: url.usernameFromPatreonUrl()
+        ?: urlForCurrentUser.usernameFromPatreonUrl()
+        ?: name?.takeIf { it.isNotBlank() }
+        ?: "Patreon"
 
 internal fun String?.usernameFromPatreonUrl(): String? {
     if (isNullOrBlank()) return null
@@ -439,7 +437,11 @@ internal fun String?.usernameFromPatreonUrl(): String? {
         .substringBefore("#")
         .trimEnd('/')
         .substringAfterLast('/')
-        .takeIf { it.isNotBlank() && it != "www.patreon.com" && !it.contains("patreon.com") }
+        .takeIf {
+            it.isNotBlank() &&
+                it != "www.patreon.com" &&
+                !it.contains("patreon.com")
+        }
 }
 
 private fun String?.htmlToMarkdown(): String? {
@@ -493,7 +495,10 @@ private fun Element.toMarkdownElement(): String {
 
         "img" -> {
             val src = attr("src").ifBlank { attr("abs:src") }.trim()
-            val alt = attr("alt").ifBlank { attr("title") }.ifBlank { "image" }.trim()
+            val alt = attr("alt")
+                .ifBlank { attr("title") }
+                .ifBlank { "image" }
+                .trim()
 
             if (src.isBlank()) "" else "![$alt]($src)"
         }
@@ -501,7 +506,10 @@ private fun Element.toMarkdownElement(): String {
         "ul" -> {
             val items = childNodes()
                 .joinToString("") { node ->
-                    if (node is Element && node.tagName().equals("li", ignoreCase = true)) {
+                    if (
+                        node is Element &&
+                        node.tagName().equals("li", ignoreCase = true)
+                    ) {
                         "- ${node.childrenToMarkdown().trim()}\n"
                     } else {
                         node.toMarkdown()
@@ -516,7 +524,10 @@ private fun Element.toMarkdownElement(): String {
             var index = 1
             val items = childNodes()
                 .joinToString("") { node ->
-                    if (node is Element && node.tagName().equals("li", ignoreCase = true)) {
+                    if (
+                        node is Element &&
+                        node.tagName().equals("li", ignoreCase = true)
+                    ) {
                         "${index++}. ${node.childrenToMarkdown().trim()}\n"
                     } else {
                         node.toMarkdown()
@@ -534,10 +545,12 @@ private fun Element.toMarkdownElement(): String {
 
         "blockquote" -> {
             val content = childrenToMarkdown().trim()
+
             if (content.isBlank()) {
                 ""
             } else {
-                content.lines().joinToString("\n") { line -> "> $line" } + "\n\n"
+                content.lines()
+                    .joinToString("\n") { line -> "> $line" } + "\n\n"
             }
         }
 
@@ -552,10 +565,12 @@ private fun Element.toMarkdownElement(): String {
     }
 }
 
-private fun Element.childrenToMarkdown(): String = childNodes().joinToString("") { node -> node.toMarkdown() }
+private fun Element.childrenToMarkdown(): String =
+    childNodes().joinToString("") { node -> node.toMarkdown() }
 
 private fun Element.markdownHeading(level: Int): String {
     val content = childrenToMarkdown().trim()
+
     if (content.isBlank()) return ""
 
     return "${"#".repeat(level)} $content\n\n"
@@ -563,32 +578,16 @@ private fun Element.markdownHeading(level: Int): String {
 
 private fun wrapMarkdown(marker: String, value: String): String {
     val content = value.trim()
+
     if (content.isBlank()) return ""
 
     return "$marker$content$marker"
 }
 
-private object PatreonDateFormats {
-    private val patterns = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-        "yyyy-MM-dd'T'HH:mm:ssXXX",
-        "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'",
-    )
-
-    private val threadLocalFormats: ThreadLocal<List<SimpleDateFormat>> = object : ThreadLocal<List<SimpleDateFormat>>() {
-        override fun initialValue(): List<SimpleDateFormat> = patterns.map { pattern ->
-            SimpleDateFormat(pattern, Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-        }
-    }
-
-    fun parse(value: String): Long? = threadLocalFormats.get()
-        .firstNotNullOfOrNull { format -> runCatching { format.parse(value)?.time }.getOrNull() }
-}
-
 private fun String?.parsePatreonDate(): Long {
     if (isNullOrBlank()) return 0L
-    return PatreonDateFormats.parse(this) ?: 0L
+
+    return Instant.parseOrNull(this)?.toEpochMilliseconds() ?: 0L
 }
 
 private fun String?.isImageFileName(): Boolean {
@@ -601,35 +600,46 @@ private fun String?.isImageFileName(): Boolean {
     return IMAGE_EXTENSIONS.any { clean.endsWith(it) }
 }
 
-private fun String.isImageUrl(): Boolean = substringBefore('?').substringBefore('#').isImageFileName()
+private fun String.isImageUrl(): Boolean =
+    substringBefore('?')
+        .substringBefore('#')
+        .isImageFileName()
 
-private fun String.extractImageUrlsFromHtml(): List<String> = Jsoup.parse(this)
-    .select("img[src], source[srcset]")
-    .flatMap { element ->
-        val src = element.attr("abs:src").ifBlank { element.attr("src") }
-        val srcset = element.attr("srcset")
-            .split(',')
-            .map { it.trim().substringBefore(' ') }
+private fun String.extractImageUrlsFromHtml(): List<String> =
+    Jsoup.parse(this)
+        .select("img[src], source[srcset]")
+        .flatMap { element ->
+            val src = element.attr("abs:src")
+                .ifBlank { element.attr("src") }
 
-        listOf(src) + srcset
-    }
-    .filter { it.startsWith("http") && it.isImageUrl() }
-    .distinct()
+            val srcset = element.attr("srcset")
+                .split(',')
+                .map { it.trim().substringBefore(' ') }
 
-private fun String.extractImageUrlsFromText(): List<String> = IMAGE_URL_REGEX
-    .findAll(this)
-    .map { it.value.replace("\\/", "/") }
-    .filter { it.isImageUrl() }
-    .distinct()
-    .toList()
+            listOf(src) + srcset
+        }
+        .filter { it.startsWith("http") && it.isImageUrl() }
+        .distinct()
 
-private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+private fun String.extractImageUrlsFromText(): List<String> =
+    IMAGE_URL_REGEX
+        .findAll(this)
+        .map { it.value.replace("\\/", "/") }
+        .filter { it.isImageUrl() }
+        .distinct()
+        .toList()
 
-private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
+private fun JsonObject.string(key: String): String? =
+    this[key]?.jsonPrimitive?.contentOrNull
+
+private fun JsonObject.obj(key: String): JsonObject? =
+    this[key] as? JsonObject
 
 private fun JsonElement?.asString(): String? {
     val primitive = this?.jsonPrimitive ?: return null
-    return primitive.contentOrNull ?: primitive.intOrNull?.toString()
+
+    return primitive.contentOrNull
+        ?: primitive.intOrNull?.toString()
 }
 
 internal fun String?.toSourcePath(baseUrl: String): String {
@@ -641,21 +651,39 @@ internal fun String?.toSourcePath(baseUrl: String): String {
 
     return when {
         clean.isBlank() -> "/"
-        clean.startsWith(baseUrl) -> clean.removePrefix(baseUrl).ifBlank { "/" }
+
+        clean.startsWith(baseUrl) ->
+            clean.removePrefix(baseUrl)
+                .ifBlank { "/" }
+
         clean.startsWith("/") -> clean
-        clean.startsWith("http://") || clean.startsWith("https://") -> clean
+
+        clean.startsWith("http://") ||
+            clean.startsWith("https://") -> clean
+
         else -> "/$clean"
     }
 }
 
-private fun PatreonImageUrls?.best(): String? = this?.original ?: this?.default ?: this?.large ?: this?.defaultLarge ?: this?.thumbnail
+private fun PatreonImageUrls?.best(): String? =
+    this?.original
+        ?: this?.default
+        ?: this?.large
+        ?: this?.defaultLarge
+        ?: this?.thumbnail
 
-private fun JsonObject.imageUrlsBest(): String? = string("original") ?: string("default") ?: string("large") ?: string("default_large") ?: string("thumbnail")
+private fun JsonObject.imageUrlsBest(): String? =
+    string("original")
+        ?: string("default")
+        ?: string("large")
+        ?: string("default_large")
+        ?: string("thumbnail")
 
-private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif")
+private val IMAGE_EXTENSIONS =
+    listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif")
 
 private val IMAGE_URL_REGEX =
     Regex(
-        """https?:\\?/\\?/[^\"'<>\s]+\.(?:jpg|jpeg|png|gif|webp|avif)(?:\?[^\"'<>\s]*)?""",
+        """https?:\\?/\\?/[^"'<>\s]+\.(?:jpg|jpeg|png|gif|webp|avif)(?:\?[^"'<>\s]*)?""",
         RegexOption.IGNORE_CASE,
     )
