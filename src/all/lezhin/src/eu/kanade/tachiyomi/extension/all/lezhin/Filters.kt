@@ -24,228 +24,109 @@ class LezhinDivision(
 
 object LezhinTagsParser {
 
-    fun parseDivisionsFromHtml(
-        html: String,
-    ): List<LezhinDivision> {
+    fun parseDivisionsFromHtml(html: String): List<LezhinDivision> {
         try {
-            val document =
-                Jsoup.parse(html)
+            val document = Jsoup.parse(html)
 
-            document
-                .select("script")
-                .forEach { script ->
-                    val data =
-                        script.data()
+            document.select("script").forEach { script ->
+                val data = script.data()
 
-                    if (
-                        !data.contains(
-                            "/v2/tag/list",
-                        )
-                    ) {
-                        return@forEach
-                    }
+                if (!data.contains("/v2/tag/list")) {
+                    return@forEach
+                }
 
-                    val generalIndex =
-                        data.indexOf(
-                            "\"general\":",
-                        )
+                val generalIndex = data.indexOf("\"general\":")
+                if (generalIndex < 0) {
+                    return@forEach
+                }
 
-                    val arrayStartIndex =
-                        if (
-                            generalIndex >= 0
-                        ) {
-                            data.indexOf(
-                                '[',
-                                generalIndex,
-                            )
-                        } else {
-                            data.indexOf(
-                                '[',
-                                data.indexOf(
-                                    "/v2/tag/list",
-                                ),
-                            )
-                        }
+                val arrayStartIndex = data.indexOf('[', generalIndex)
+                if (arrayStartIndex < 0) {
+                    return@forEach
+                }
 
-                    if (
-                        arrayStartIndex < 0
-                    ) {
-                        return@forEach
-                    }
+                val arrayEndIndex = findMatchingBracket(data, arrayStartIndex)
+                if (arrayEndIndex < 0) {
+                    return@forEach
+                }
 
-                    val arrayEndIndex =
-                        findMatchingBracket(
-                            value = data,
-                            startIndex =
-                            arrayStartIndex,
-                        )
+                val array = JSONArray(
+                    data.substring(arrayStartIndex, arrayEndIndex + 1),
+                )
 
-                    if (
-                        arrayEndIndex < 0
-                    ) {
-                        return@forEach
-                    }
+                val divisions = buildList {
+                    for (i in 0 until array.length()) {
+                        val divisionObject = array.getJSONObject(i)
+                        val divisionName = divisionObject.optString("divisionName", "Tags")
+                        val tagsArray = divisionObject.optJSONArray("tags") ?: JSONArray()
 
-                    val arrayJson =
-                        data.substring(
-                            arrayStartIndex,
-                            arrayEndIndex + 1,
-                        )
+                        val tags = buildList {
+                            for (j in 0 until tagsArray.length()) {
+                                val tagObject = tagsArray.getJSONObject(j)
 
-                    val array =
-                        JSONArray(
-                            arrayJson,
-                        )
+                                val tagId = tagObject.optLong("tagId", -1L)
+                                val tag = tagObject.optString("tag", "")
+                                val name = tagObject.optString("name", tag)
 
-                    val divisions =
-                        buildList {
-                            for (
-                            i in
-                            0 until
-                                array.length()
-                            ) {
-                                val divisionObject =
-                                    array.getJSONObject(
-                                        i,
-                                    )
-
-                                val divisionName =
-                                    divisionObject
-                                        .optString(
-                                            "divisionName",
-                                            "Tags",
-                                        )
-
-                                val tagsArray =
-                                    divisionObject
-                                        .optJSONArray(
-                                            "tags",
-                                        )
-                                        ?: JSONArray()
-
-                                val tags =
-                                    buildList {
-                                        for (
-                                        j in
-                                        0 until
-                                            tagsArray.length()
-                                        ) {
-                                            val tagObject =
-                                                tagsArray
-                                                    .getJSONObject(
-                                                        j,
-                                                    )
-
-                                            val tagId =
-                                                tagObject
-                                                    .optLong(
-                                                        "tagId",
-                                                        -1L,
-                                                    )
-
-                                            val tag =
-                                                tagObject
-                                                    .optString(
-                                                        "tag",
-                                                        "",
-                                                    )
-
-                                            val name =
-                                                tagObject
-                                                    .optString(
-                                                        "name",
-                                                        tag,
-                                                    )
-
-                                            add(
-                                                LezhinTag(
-                                                    tagId =
-                                                    tagId,
-                                                    tag =
-                                                    tag,
-                                                    name =
-                                                    name,
-                                                ),
-                                            )
-                                        }
-                                    }
-
-                                if (
-                                    tags.isNotEmpty()
-                                ) {
-                                    add(
-                                        LezhinDivision(
-                                            divisionName =
-                                            divisionName,
-                                            tags =
-                                            tags,
-                                        ),
-                                    )
+                                if (tag.isBlank() && name.isBlank()) {
+                                    continue
                                 }
+
+                                add(
+                                    LezhinTag(
+                                        tagId = tagId,
+                                        tag = tag,
+                                        name = name,
+                                    ),
+                                )
                             }
                         }
 
-                    if (
-                        divisions.isNotEmpty()
-                    ) {
-                        Log.d(
-                            LOG_TAG,
-                            "Parsed ${
-                                divisions.sumOf {
-                                    it.tags.size
-                                }
-                            } tags across ${divisions.size} divisions",
-                        )
-
-                        return divisions
+                        if (tags.isNotEmpty()) {
+                            add(
+                                LezhinDivision(
+                                    divisionName = divisionName,
+                                    tags = tags,
+                                ),
+                            )
+                        }
                     }
                 }
+
+                if (divisions.isNotEmpty()) {
+                    Log.d(
+                        LOG_TAG,
+                        "Parsed ${divisions.sumOf { it.tags.size }} tags across ${divisions.size} divisions",
+                    )
+
+                    return divisions
+                }
+            }
         } catch (e: Throwable) {
-            Log.e(
-                LOG_TAG,
-                "Failed to parse embedded tag JSON",
-                e,
-            )
+            Log.e(LOG_TAG, "Failed to parse embedded tag JSON", e)
         }
 
         try {
-            val document =
-                Jsoup.parse(html)
+            val document = Jsoup.parse(html)
 
-            val names =
-                document
-                    .select(
-                        ".panelBody__items__Bzuhu button, " +
-                            ".panelBody__items__Bzuhu a, " +
-                            ".panelBody__item__TBUYn",
+            val names = document
+                .select(
+                    ".panelBody__items__Bzuhu button, " +
+                        ".panelBody__items__Bzuhu a, " +
+                        ".panelBody__item__TBUYn",
+                )
+                .map { it.text().trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+
+            if (names.isNotEmpty()) {
+                val tags = names.mapIndexed { index, name ->
+                    LezhinTag(
+                        tagId = -1L - index,
+                        tag = name,
+                        name = name,
                     )
-                    .map {
-                        it.text()
-                    }
-                    .filter {
-                        it.isNotEmpty()
-                    }
-                    .distinct()
-
-            if (
-                names.isNotEmpty()
-            ) {
-                val tags =
-                    names.mapIndexed {
-                            index,
-                            name,
-                        ->
-
-                        LezhinTag(
-                            tagId =
-                            -1L -
-                                index,
-                            tag =
-                            name,
-                            name =
-                            name,
-                        )
-                    }
+                }
 
                 Log.d(
                     LOG_TAG,
@@ -254,20 +135,16 @@ object LezhinTagsParser {
 
                 return listOf(
                     LezhinDivision(
-                        divisionName =
-                        "Tags",
-                        tags =
-                        tags,
+                        divisionName = "Tags",
+                        tags = tags,
                     ),
                 )
             }
         } catch (e: Throwable) {
-            Log.e(
-                LOG_TAG,
-                "Failed to scrape fallback tags",
-                e,
-            )
+            Log.e(LOG_TAG, "Failed to scrape fallback tags", e)
         }
+
+        Log.w(LOG_TAG, "No tags found")
 
         return emptyList()
     }
@@ -277,25 +154,29 @@ object LezhinTagsParser {
         startIndex: Int,
     ): Int {
         var depth = 0
+        var inString = false
+        var escaped = false
 
-        for (
-        i in
-        startIndex until
-            value.length
-        ) {
-            when (
-                value[i]
-            ) {
-                '[' -> {
-                    depth++
+        for (i in startIndex until value.length) {
+            val char = value[i]
+
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    char == '\\' -> escaped = true
+                    char == '"' -> inString = false
                 }
 
+                continue
+            }
+
+            when (char) {
+                '"' -> inString = true
+                '[' -> depth++
                 ']' -> {
                     depth--
 
-                    if (
-                        depth == 0
-                    ) {
+                    if (depth == 0) {
                         return i
                     }
                 }
@@ -328,54 +209,35 @@ class LezhinTagFilterGroup(
 
 fun divisionsToFilterList(
     divisions: List<LezhinDivision>,
-): FilterList {
-    val groups =
-        divisions.map { division ->
+): FilterList = FilterList(
+    *divisions
+        .map { division ->
             LezhinTagFilterGroup(
-                displayName =
-                division.divisionName,
-                tags =
-                division.tags,
+                displayName = division.divisionName,
+                tags = division.tags,
             )
         }
-
-    return FilterList(
-        *groups.toTypedArray(),
-    )
-}
+        .toTypedArray(),
+)
 
 fun selectedTagIds(
     filters: FilterList,
 ): List<Long> = filters
-    .filterIsInstance<
-        LezhinTagFilterGroup,
-        >()
+    .filterIsInstance<LezhinTagFilterGroup>()
     .flatMap { group ->
         group.state
-            .filter {
-                it.state &&
-                    it.tagId >= 0L
-            }
-            .map {
-                it.tagId
-            }
+            .filter { it.state && it.tagId >= 0L }
+            .map { it.tagId }
     }
     .distinct()
 
 fun selectedTagNames(
     filters: FilterList,
 ): List<String> = filters
-    .filterIsInstance<
-        LezhinTagFilterGroup,
-        >()
+    .filterIsInstance<LezhinTagFilterGroup>()
     .flatMap { group ->
         group.state
-            .filter {
-                it.state &&
-                    it.tagId < 0L
-            }
-            .map {
-                it.tag
-            }
+            .filter { it.state && it.tagId < 0L }
+            .map { it.tag }
     }
     .distinct()

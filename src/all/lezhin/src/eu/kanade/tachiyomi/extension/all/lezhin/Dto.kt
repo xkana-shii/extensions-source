@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 @Serializable
 class LezhinContentListDto(
@@ -17,11 +18,13 @@ class LezhinContentDto(
     val alias: String,
     val title: String,
     val artists: List<LezhinArtistDto> = emptyList(),
+    val updated: Long? = null,
+    val updatedAt: Long? = null,
 ) {
     fun toSManga(languagePath: String) = SManga.create().apply {
         url = "/$languagePath/comic/$alias"
         title = this@LezhinContentDto.title.trim()
-        thumbnail_url = "https://ccdn.lezhin.com/v2/comics/$id/images/tall.webp"
+        thumbnail_url = getCoverUrl()
 
         val authors = artists
             .filter {
@@ -50,6 +53,21 @@ class LezhinContentDto(
             artist = painters.joinToString(", ")
         }
     }
+
+    private fun getCoverUrl(): String = "https://ccdn.lezhin.com/v2/comics/$id/images/tall.webp"
+        .toHttpUrl()
+        .newBuilder()
+        .apply {
+            (updated ?: updatedAt)
+                ?.takeIf { it > 0L }
+                ?.let {
+                    addQueryParameter("updated", it.toString())
+                }
+
+            addQueryParameter("width", "1200")
+        }
+        .build()
+        .toString()
 }
 
 @Serializable

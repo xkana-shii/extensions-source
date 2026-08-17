@@ -16,16 +16,21 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.applicationContext
+import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import org.jsoup.Jsoup
 import java.io.IOException
@@ -38,9 +43,7 @@ abstract class Patreon :
     KeiSource(),
     ConfigurableSource {
 
-    private val preferences by lazy {
-        applicationContext.getSharedPreferences("source_$id", 0x0000)
-    }
+    private val preferences by getPreferencesLazy()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -60,9 +63,7 @@ abstract class Patreon :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        if (page > 1) {
-            return MangasPage(emptyList(), false)
-        }
+        if (page > 1) return MangasPage(emptyList(), false)
 
         tryOrNull {
             fetchExploreSections()
@@ -83,12 +84,9 @@ abstract class Patreon :
         filters: FilterList,
     ): MangasPage {
         if (filters.membershipsOnly()) {
-            if (page > 1) {
-                return MangasPage(emptyList(), false)
-            }
+            if (page > 1) return MangasPage(emptyList(), false)
 
             val memberships = fetchCurrentUserMemberships().mangas
-
             val filteredMemberships = if (query.isBlank()) {
                 memberships
             } else {
@@ -103,14 +101,11 @@ abstract class Patreon :
         }
 
         if (query.isBlank()) {
-            if (page > 1) {
-                return MangasPage(emptyList(), false)
-            }
-
+            if (page > 1) return MangasPage(emptyList(), false)
             return fetchExploreSections()
         }
 
-        if (patreonCookie().isNotBlank()) {
+        if (hasPatreonSession()) {
             tryOrNull {
                 fetchLoggedInSearch(page, query)
             }?.let { result ->
@@ -157,8 +152,15 @@ abstract class Patreon :
         val mangaDeferred = if (fetchDetails) {
             async {
                 fetchCampaignManga(campaignId).apply {
-                    title = manga.title.takeIf { title -> title.isNotBlank() } ?: title
-                    thumbnail_url = manga.thumbnail_url ?: thumbnail_url
+                    if (manga.title.isNotBlank()) {
+                        title = manga.title
+                    }
+
+                    manga.thumbnail_url
+                        ?.takeIf { thumbnail -> thumbnail.isNotBlank() }
+                        ?.let { thumbnail ->
+                            thumbnail_url = thumbnail
+                        }
                 }
             }
         } else {
@@ -184,7 +186,7 @@ abstract class Patreon :
             .getString(POST_PAGES_PREF, POST_PAGES_DEFAULT)!!
             .toInt()
 
-        val requestHeaders = patreonHeaders()
+        val requestHeaders = patreonHeaders(requireLogin = false)
 
         val chapters = mutableListOf<SChapter>()
         var nextUrl: String? = postsApiUrl(campaignId)
@@ -234,7 +236,6 @@ abstract class Patreon :
 
     override fun getChapterUrl(chapter: SChapter): String {
         val postId = chapter.url.extractPostIdFromChapterUrl()
-
         return "$baseUrl/posts/$postId"
     }
 
@@ -253,13 +254,19 @@ abstract class Patreon :
 
         val root = getJson<PatreonApiRoot>(
             postApiUrl(postId),
-            patreonHeaders(),
+            patreonHeaders(requireLogin = false),
         ) { code ->
             "Patreon HTTP $code. This post may be locked, expired, or blocked by Patreon."
         }
 
         val post = root.dataPosts(json).firstOrNull()
             ?: return emptyList()
+
+        if (post.isLocked()) {
+            throw IOException(
+                "This Patreon post is locked. You need a higher membership tier to read it.",
+            )
+        }
 
         val urls = post.imageUrls(root, json)
 
@@ -269,17 +276,27 @@ abstract class Patreon :
     }
 
     override fun imageRequest(page: Page): Request {
-        val imageHeaders = patreonHeaders(requireLogin = false)
-            .newBuilder()
+        val imageUrl = page.imageUrl!!
+        val imageHost = imageUrl.toHttpUrlOrNull()?.host
+
+        val imageHeaders = if (
+            imageHost == "patreon.com" ||
+            imageHost?.endsWith(".patreon.com") == true
+        ) {
+            patreonHeaders(requireLogin = false).newBuilder()
+        } else {
+            headers.newBuilder()
+        }
             .set(
                 "Accept",
                 "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             )
             .build()
 
-        return GET(page.imageUrl!!, imageHeaders)
+        return GET(imageUrl, imageHeaders)
     }
 
+    @Suppress("UNUSED_PARAMETER")
     override fun getFilterList(data: JsonElement?): FilterList = FilterList(
         MembershipsOnlyFilter(),
     )
@@ -290,17 +307,14 @@ abstract class Patreon :
             title = "Maximum post pages to load"
             summary = "Loading more pages costs more time and network traffic. Currently: %s"
             entryValues = POST_PAGE_OPTIONS
-            entries = POST_PAGE_OPTIONS
-                .map { option -> "$option pages" }
-                .toTypedArray()
+            entries = POST_PAGE_OPTIONS.map { option -> "$option pages" }.toTypedArray()
             setDefaultValue(POST_PAGES_DEFAULT)
         }.let(screen::addPreference)
 
         CheckBoxPreference(screen.context).apply {
             key = HIDE_LOCKED_CHAPTERS_PREF
             title = "Hide locked chapters"
-            summary =
-                "Hide Patreon posts that your current membership cannot view. When disabled, locked posts appear with a 🔒 prefix."
+            summary = "Hide Patreon posts that your current membership cannot view. When disabled, locked posts appear with a 🔒 prefix."
             setDefaultValue(false)
         }.let(screen::addPreference)
     }
@@ -313,9 +327,7 @@ abstract class Patreon :
             "Patreon memberships HTTP $code. Log in to Patreon using the app WebView first."
         }
 
-        val mangas = root.currentUserMembershipResults(json)
-
-        return MangasPage(mangas, false)
+        return MangasPage(root.currentUserMembershipResults(json), false)
     }
 
     private suspend fun fetchExploreSections(): MangasPage {
@@ -326,9 +338,7 @@ abstract class Patreon :
             "Patreon explore HTTP $code"
         }
 
-        val mangas = root.exploreCampaignResults(json)
-
-        return MangasPage(mangas, false)
+        return MangasPage(root.exploreCampaignResults(json), false)
     }
 
     private suspend fun fetchLoggedInSearch(
@@ -349,7 +359,7 @@ abstract class Patreon :
 
         val root = getJson<PatreonApiRoot>(
             loggedInSearchApiUrl(query, cursor),
-            patreonHeaders(requireLogin = false),
+            patreonHeaders(),
         ) { code ->
             "Patreon logged-in search HTTP $code"
         }
@@ -357,16 +367,9 @@ abstract class Patreon :
         val mangas = root.searchFeedCampaignResults(json)
         val next = root.links?.next
 
-        saveNextSearchCursor(
-            query,
-            page,
-            next,
-        )
+        saveNextSearchCursor(query, page, next)
 
-        return MangasPage(
-            mangas,
-            !next.isNullOrBlank(),
-        )
+        return MangasPage(mangas, !next.isNullOrBlank())
     }
 
     private suspend fun fetchAnonymousSearch(
@@ -380,10 +383,8 @@ abstract class Patreon :
             "Patreon anonymous search HTTP $code"
         }
 
-        val mangas = root.searchResults(baseUrl)
-
         return MangasPage(
-            mangas,
+            root.searchResults(baseUrl),
             !root.links?.next.isNullOrBlank(),
         )
     }
@@ -392,26 +393,20 @@ abstract class Patreon :
         page: Int,
         query: String,
     ): MangasPage {
-        val searchUrl =
-            "$baseUrl/search?q=${query.encode()}&p=$page"
+        val searchUrl = "$baseUrl/search?q=${query.encode()}&p=$page"
 
         val response = client.get(
             searchUrl,
-            headers,
+            patreonHeaders(requireLogin = false),
             ensureSuccess = false,
         )
 
         response.use { searchResponse ->
             if (!searchResponse.isSuccessful) {
-                throw Exception(
-                    "Patreon search HTTP ${searchResponse.code}",
-                )
+                throw Exception("Patreon search HTTP ${searchResponse.code}")
             }
 
-            val document = Jsoup.parse(
-                searchResponse.body.string(),
-                baseUrl,
-            )
+            val document = Jsoup.parse(searchResponse.body.string(), baseUrl)
 
             val results = document
                 .select(
@@ -422,32 +417,24 @@ abstract class Patreon :
                     val link = if (element.`is`("a")) {
                         element
                     } else {
-                        element.selectFirst(
-                            "a[href*=patreon.com]",
-                        )
+                        element.selectFirst("a[href*=patreon.com]")
                     } ?: return@mapNotNull null
 
                     val href = link.attr("abs:href")
-                        .ifBlank {
-                            link.attr("href")
-                        }
+                        .ifBlank { link.attr("href") }
 
-                    val title = element
-                        .selectFirst("h1")
+                    val title = element.selectFirst("h1")
                         ?.text()
                         ?.trim()
-                        ?: element
-                            .selectFirst("span")
+                        ?: element.selectFirst("span")
                             ?.text()
                             ?.trim()
                         ?: return@mapNotNull null
 
-                    val thumbnail = element
-                        .selectFirst("img")
+                    val thumbnail = element.selectFirst("img")
                         ?.attr("abs:src")
                         ?.ifBlank {
-                            element
-                                .selectFirst("img")
+                            element.selectFirst("img")
                                 ?.attr("src")
                                 .orEmpty()
                         }
@@ -458,23 +445,17 @@ abstract class Patreon :
                         ?.groupValues
                         ?.getOrNull(1)
 
-                    val username =
-                        href.usernameFromPatreonUrl()
-                            ?: title
+                    val username = href.usernameFromPatreonUrl() ?: title
 
                     SManga.create().apply {
-                        this.url = campaignId
+                        url = campaignId
                             ?.let { id -> "/campaign/$id" }
                             ?: href.toSourcePath(baseUrl)
 
                         this.title = title
                         author = username
                         artist = username
-
-                        thumbnail_url = thumbnail.takeIf { url ->
-                            url.isNotBlank()
-                        }
-
+                        thumbnail_url = thumbnail.takeIf { url -> url.isNotBlank() }
                         description = ""
                         initialized = true
                     }
@@ -482,14 +463,10 @@ abstract class Patreon :
                 .distinctBy { manga -> manga.url }
 
             val hasNextPage = document.selectFirst(
-                "a[href*=/search][href*=p=${page + 1}], " +
-                    "a[href*=\"p=${page + 1}\"]",
+                "a[href*=/search][href*=p=${page + 1}], a[href*=\"p=${page + 1}\"]",
             ) != null
 
-            return MangasPage(
-                results,
-                hasNextPage,
-            )
+            return MangasPage(results, hasNextPage)
         }
     }
 
@@ -497,12 +474,23 @@ abstract class Patreon :
         .getCookie(baseUrl)
         .orEmpty()
 
+    private fun hasPatreonSession(): Boolean = patreonCookie()
+        .split(';')
+        .any { rawCookie ->
+            val cookie = rawCookie.trim()
+            val separator = cookie.indexOf('=')
+
+            separator > 0 &&
+                cookie.substring(0, separator).trim() == SESSION_COOKIE &&
+                cookie.substring(separator + 1).trim().isNotBlank()
+        }
+
     private fun patreonHeaders(
         requireLogin: Boolean = true,
     ): Headers {
         val cookie = patreonCookie().trim()
 
-        if (requireLogin && cookie.isBlank()) {
+        if (requireLogin && !hasPatreonSession()) {
             throw Exception(
                 "Log in to Patreon using the app WebView first, then try again.",
             )
@@ -517,9 +505,7 @@ abstract class Patreon :
             .build()
     }
 
-    private suspend fun resolveCampaignId(
-        query: String,
-    ): String {
+    private suspend fun resolveCampaignId(query: String): String {
         val trimmed = query.trim()
 
         if (trimmed.isBlank()) {
@@ -536,22 +522,14 @@ abstract class Patreon :
             trimmed.startsWith("http://") ||
                 trimmed.startsWith("https://") -> trimmed
 
-            trimmed.startsWith("/") ->
-                "$baseUrl$trimmed"
-
-            trimmed.contains('/') ->
-                "$baseUrl/$trimmed"
-
-            else ->
-                "$baseUrl/$trimmed"
+            trimmed.startsWith("/") -> "$baseUrl$trimmed"
+            else -> "$baseUrl/$trimmed"
         }
 
         return fetchCampaignIdFromPage(url)
     }
 
-    private suspend fun fetchCampaignIdFromPage(
-        url: String,
-    ): String {
+    private suspend fun fetchCampaignIdFromPage(url: String): String {
         val response = client.get(
             url,
             patreonHeaders(requireLogin = false),
@@ -567,13 +545,8 @@ abstract class Patreon :
 
             val html = pageResponse.body.string()
 
-            CAMPAIGN_ID_REGEXES.forEach { regex ->
-                regex.find(html)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.let { campaignId ->
-                        return campaignId
-                    }
+            extractCampaignIdFromHtml(html)?.let { campaignId ->
+                return campaignId
             }
         }
 
@@ -582,19 +555,125 @@ abstract class Patreon :
         )
     }
 
-    private suspend fun fetchCampaignManga(
-        campaignId: String,
-    ): SManga = try {
+    private fun extractCampaignIdFromHtml(html: String): String? {
+        val document = Jsoup.parse(html, baseUrl)
+
+        document
+            .select("script#__NEXT_DATA__, script[type=application/json]")
+            .forEach { script ->
+                val payload = script.data()
+                    .ifBlank { script.html() }
+                    .trim()
+
+                if (payload.isNotBlank()) {
+                    val root = runCatching {
+                        json.parseToJsonElement(payload)
+                    }.getOrNull()
+
+                    if (root != null) {
+                        val campaignId = root.findCampaignId()
+
+                        if (campaignId != null) {
+                            return campaignId
+                        }
+                    }
+                }
+            }
+
+        for (regex in CAMPAIGN_ID_REGEXES) {
+            val campaignId = regex.find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+
+            if (!campaignId.isNullOrBlank()) {
+                return campaignId
+            }
+        }
+
+        return null
+    }
+
+    private fun JsonElement.findCampaignId(): String? {
+        when (this) {
+            is JsonObject -> {
+                val directId = directCampaignId()
+
+                if (directId != null) {
+                    return directId
+                }
+
+                for (value in values) {
+                    val nestedId = value.findCampaignId()
+
+                    if (nestedId != null) {
+                        return nestedId
+                    }
+                }
+            }
+
+            is JsonArray -> {
+                for (value in this) {
+                    val nestedId = value.findCampaignId()
+
+                    if (nestedId != null) {
+                        return nestedId
+                    }
+                }
+            }
+
+            else -> Unit
+        }
+
+        return null
+    }
+
+    private fun JsonObject.directCampaignId(): String? {
+        val campaign = this["campaign"] as? JsonObject
+
+        if (campaign != null) {
+            val campaignData = campaign["data"] as? JsonObject
+
+            val id = campaignData
+                ?.primitiveString("id")
+                ?: campaign.primitiveString("id")
+
+            if (id != null && id.matches(NUMERIC_ID_REGEX)) {
+                return id
+            }
+        }
+
+        val explicitId = primitiveString("campaign_id")
+            ?: primitiveString("campaignId")
+
+        if (explicitId != null && explicitId.matches(NUMERIC_ID_REGEX)) {
+            return explicitId
+        }
+
+        val type = primitiveString("type")
+        val id = primitiveString("id")
+
+        if (
+            type?.contains("campaign", ignoreCase = true) == true &&
+            id != null &&
+            id.matches(NUMERIC_ID_REGEX)
+        ) {
+            return id
+        }
+
+        return null
+    }
+
+    private fun JsonObject.primitiveString(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+
+    private suspend fun fetchCampaignManga(campaignId: String): SManga = try {
         val root = getJson<PatreonApiRoot>(
             campaignApiUrl(campaignId),
-            patreonHeaders(),
+            patreonHeaders(requireLogin = false),
         ) { code ->
             "Patreon campaign HTTP $code"
         }
 
-        val campaign = root.dataResource(json)
-
-        campaign.toSManga(campaignId)
+        root.dataResource(json).toSManga(campaignId)
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -622,10 +701,7 @@ abstract class Patreon :
         if (!response.isSuccessful) {
             val code = response.code
             response.close()
-
-            throw Exception(
-                errorMessage(code),
-            )
+            throw Exception(errorMessage(code))
         }
 
         return response.parseAs(json)
@@ -657,28 +733,20 @@ abstract class Patreon :
             ?: return
 
         val key = query.searchCursorKey()
-
-        val map = searchCursorCache.getOrPut(key) {
-            mutableMapOf()
-        }
+        val map = searchCursorCache.getOrPut(key) { mutableMapOf() }
 
         map[page + 1] = cursor
     }
 
     private fun currentUserMembershipsApiUrl(): String = "$baseUrl/api/current_user" +
-        "?fields%5Buser%5D=" +
-        "&fields%5Bmember%5D=is_free_member%2Cis_free_trial" +
-        "&fields%5Bcampaign%5D=avatar_photo_image_urls%2Ccreation_name%2Cis_nsfw%2Cname%2Cpublished_at%2Curl%2Curl_for_current_user%2Cvanity%2Csummary" +
+        "?fields%5Bcampaign%5D=avatar_photo_image_urls%2Cname%2Csummary%2Curl%2Curl_for_current_user%2Cvanity" +
         "&include=active_memberships%2Cactive_memberships.campaign" +
         "&json-api-version=1.0" +
         "&json-api-use-default-includes=false"
 
     private fun exploreSectionsApiUrl(): String = "$baseUrl/api/explore/sections" +
-        "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Ccreation_name%2Csummary%2Cis_nsfw%2Cavatar_photo_url%2Cis_free_member%2Cis_paid_member%2Curl%2Cvanity%2Cprimary_theme_color%2Cmembership_emphasization_preference%2Crecommendation_reason" +
-        "&fields%5Bexplore-section%5D=display_type%2Csection_type%2Ctitle%2Cdescription%2Curl%2Cdisplay_meta" +
-        "&fields%5Bexplore-topic%5D=label%2Cvalue%2Cdisplay_meta" +
-        "&fields%5Bexplore-filter-option%5D=filter_type%2Clabel%2Cvalue" +
-        "&include=items%2Citems.campaign%2Citems.topic%2Cfilter" +
+        "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Csummary%2Cavatar_photo_url%2Curl%2Cvanity" +
+        "&include=items%2Citems.campaign" +
         "&filter%5Banchor_topic%5D=" +
         "&filter%5Bselected_topic%5D=" +
         "&filter%5Binclude_nsfw%5D=true" +
@@ -693,7 +761,7 @@ abstract class Patreon :
         "?filter%5Bquery%5D=${query.encode()}" +
         "&filter%5Bis_for_preview%5D=false" +
         "&filter%5Binclude_nsfw%5D=true" +
-        "&fields%5Bcampaign%5D=currency%2Cshow_audio_post_download_links%2Cavatar_photo_url%2Cavatar_photo_image_urls%2Cis_nsfw%2Cis_monthly%2Cname%2Csummary%2Curl%2Cpatron_count%2Cprimary_theme_color%2Ccampaign_id%2Ccreation_name%2Cavatar_photo_blurred_url%2Cis_free_member%2Cis_paid_member%2Cmember_count%2Cpost_count%2Cmembership_emphasization_preference%2Cvanity" +
+        "&fields%5Bcampaign%5D=avatar_photo_url%2Cavatar_photo_image_urls%2Cname%2Csummary%2Curl%2Ccampaign_id%2Cvanity" +
         "&include=card_campaign.campaign" +
         "&page%5Bsize%5D=24" +
         "&page%5Bcursor%5D=${cursor.encode()}" +
@@ -710,37 +778,21 @@ abstract class Patreon :
         "&json-api-use-default-includes=false" +
         "&include=[]"
 
-    private fun postsApiUrl(
-        campaignId: String,
-    ): String = "$baseUrl/api/posts" +
+    private fun postsApiUrl(campaignId: String): String = "$baseUrl/api/posts" +
         "?$POSTS_QUERY" +
         "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
 
-    private fun postApiUrl(
-        postId: String,
-    ): String = "$baseUrl/api/posts/${postId.encode()}" +
-        "?$POST_DETAIL_QUERY"
+    private fun postApiUrl(postId: String): String = "$baseUrl/api/posts/${postId.encode()}?$POST_DETAIL_QUERY"
 
-    private fun campaignApiUrl(
-        campaignId: String,
-    ): String = "$baseUrl/api/campaigns/${campaignId.encode()}" +
-        "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Ccurrent_user_is_free_member%2Ccurrent_user_is_teammate_or_owner%2Chas_rss%2Cid%2Cmain_video_embed%2Cmain_video_url%2Cname%2Csummary%2Curl%2Cvanity" +
-        "&fields%5Bconnected_socials%5D=app_name%2Cexternal_profile_url%2Cis_public" +
-        "&fields%5Bpledge%5D=amount_cents" +
-        "&fields%5Buser%5D=id" +
-        "&include=connected_socials%2Ccreator%2Ccurrent_user_pledge" +
+    private fun campaignApiUrl(campaignId: String): String = "$baseUrl/api/campaigns/${campaignId.encode()}" +
+        "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Cname%2Csummary%2Curl%2Cvanity" +
         "&json-api-version=1.0" +
         "&json-api-use-default-includes=false"
 
     private fun String.absolutePatreonUrl(): String = when {
-        startsWith("http://") ||
-            startsWith("https://") -> this
-
-        startsWith("/") ->
-            "$baseUrl$this"
-
-        else ->
-            "$baseUrl/$this"
+        startsWith("http://") || startsWith("https://") -> this
+        startsWith("/") -> "$baseUrl$this"
+        else -> "$baseUrl/$this"
     }
 
     private fun String.extractCampaignIdFromSourceUrl(): String? = CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
@@ -748,22 +800,13 @@ abstract class Patreon :
         ?.groupValues
         ?.getOrNull(1)
 
-    private fun String.encode(): String = URLEncoder.encode(
-        this,
-        Charsets.UTF_8.name(),
-    )
+    private fun String.encode(): String = URLEncoder.encode(this, Charsets.UTF_8.name())
 
-    private fun String.decodeUrl(): String = URLDecoder.decode(
-        this,
-        Charsets.UTF_8.name(),
-    )
+    private fun String.decodeUrl(): String = URLDecoder.decode(this, Charsets.UTF_8.name())
 
     private fun String.searchCursorKey(): String = trim().lowercase()
 
-    private fun hideLockedChapters(): Boolean = preferences.getBoolean(
-        HIDE_LOCKED_CHAPTERS_PREF,
-        false,
-    )
+    private fun hideLockedChapters(): Boolean = preferences.getBoolean(HIDE_LOCKED_CHAPTERS_PREF, false)
 
     private fun String.extractPostIdFromChapterUrl(): String = substringAfterLast("/post/")
         .substringBefore('/')
@@ -777,55 +820,36 @@ abstract class Patreon :
         .firstOrNull()
         ?.state == true
 
-    private class MembershipsOnlyFilter :
-        Filter.CheckBox(
-            "Only memberships",
-            false,
-        )
+    private class MembershipsOnlyFilter : Filter.CheckBox("Only memberships", false)
 
     private class LruCache<K, V>(
         private val maxEntries: Int,
-    ) : LinkedHashMap<K, V>(
-        16,
-        0.75f,
-        true,
-    ) {
+    ) : LinkedHashMap<K, V>(16, 0.75f, true) {
+
         override fun removeEldestEntry(
             eldest: MutableMap.MutableEntry<K, V>,
         ): Boolean = size > maxEntries
     }
 
     companion object {
-        private const val POST_PAGES_PREF =
-            "PATREON_POST_PAGES"
-
-        private const val HIDE_LOCKED_CHAPTERS_PREF =
-            "PATREON_HIDE_LOCKED_CHAPTERS"
-
-        private const val POST_PAGES_DEFAULT =
-            "5"
+        private const val POST_PAGES_PREF = "PATREON_POST_PAGES"
+        private const val HIDE_LOCKED_CHAPTERS_PREF = "PATREON_HIDE_LOCKED_CHAPTERS"
+        private const val POST_PAGES_DEFAULT = "5"
+        private const val SESSION_COOKIE = "session_id"
 
         private val POST_PAGE_OPTIONS =
-            (5..75 step 5)
-                .map { option -> option.toString() }
-                .toTypedArray()
+            (5..75 step 5).map { option -> option.toString() }.toTypedArray()
 
-        private const val POST_PAGES_CACHE_SIZE =
-            200
-
-        private const val SEARCH_CURSOR_CACHE_SIZE =
-            50
+        private const val POST_PAGES_CACHE_SIZE = 200
+        private const val SEARCH_CURSOR_CACHE_SIZE = 50
 
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
 
         private const val POSTS_QUERY =
-            "include=user%2Cattachments_media%2Ccampaign%2Cpoll.choices%2Cpoll.current_user_responses.user%2Cpoll.current_user_responses.choice%2Cpoll.current_user_responses.poll%2Caccess_rules.tier.null%2Cimages.null%2Caudio.null" +
-                "&fields%5Bpost%5D=change_visibility_at%2Ccomment_count%2Ccontent%2Ccontent_json_string%2Ccurrent_user_can_delete%2Ccurrent_user_can_view%2Ccurrent_user_has_liked%2Cembed%2Cimage%2Cis_paid%2Clike_count%2Cmin_cents_pledged_to_view%2Cpost_file%2Cpost_metadata%2Cpublished_at%2Cpatron_count%2Cpatreon_url%2Cpost_type%2Cpledge_url%2Cthumbnail_url%2Cteaser_text%2Ctitle%2Cupgrade_url%2Curl%2Cwas_posted_by_campaign_owner" +
-                "&fields%5Buser%5D=image_url%2Cfull_name%2Curl" +
-                "&fields%5Bcampaign%5D=show_audio_post_download_links%2Cavatar_photo_url%2Cearnings_visibility%2Cis_nsfw%2Cis_monthly%2Cname%2Curl%2Cvanity" +
-                "&fields%5Baccess_rule%5D=access_rule_type%2Camount_cents" +
-                "&fields%5Bmedia%5D=id%2Cimage_urls%2Cdownload_url%2Cmetadata%2Cfile_name" +
+            "include=attachments%2Cattachments_media%2Cimages%2Cmedia" +
+                "&fields%5Bpost%5D=content%2Ccontent_json_string%2Ccurrent_user_can_view%2Cimage%2Cpost_file%2Cpublished_at%2Ctitle" +
+                "&fields%5Bmedia%5D=id%2Cimage_urls%2Cdownload_url%2Cmimetype%2Cfile_name" +
                 "&sort=-published_at" +
                 "&filter%5Bis_draft%5D=false" +
                 "&filter%5Bcontains_exclusive_posts%5D=true" +
@@ -833,9 +857,9 @@ abstract class Patreon :
                 "&json-api-version=1.0"
 
         private const val POST_DETAIL_QUERY =
-            "include=user%2Cattachments_media%2Ccampaign%2Caccess_rules.tier.null%2Cimages.null%2Caudio.null" +
-                "&fields%5Bpost%5D=content%2Ccontent_json_string%2Ccurrent_user_can_view%2Cembed%2Cimage%2Cis_paid%2Cpost_file%2Cpost_metadata%2Cpublished_at%2Cpatreon_url%2Cpost_type%2Cthumbnail_url%2Cteaser_text%2Ctitle%2Curl" +
-                "&fields%5Bmedia%5D=id%2Cimage_urls%2Cdownload_url%2Cmetadata%2Cfile_name" +
+            "include=attachments%2Cattachments_media%2Cimages%2Cmedia" +
+                "&fields%5Bpost%5D=content%2Ccontent_json_string%2Ccurrent_user_can_view%2Cimage%2Cpost_file%2Cpublished_at%2Ctitle" +
+                "&fields%5Bmedia%5D=id%2Cimage_urls%2Cdownload_url%2Cmimetype%2Cfile_name" +
                 "&json-api-use-default-includes=false" +
                 "&json-api-version=1.0"
 
@@ -847,10 +871,16 @@ abstract class Patreon :
 
         private val CAMPAIGN_ID_REGEXES = listOf(
             Regex(
-                """"self"\s*:\s*"https:\\/\\/www\.patreon\.com\\/api\\/campaigns\\/(\d+)"""",
+                """"campaign"\s*:\s*\{\s*"data"\s*:\s*\{[^{}]*"id"\s*:\s*"(\d+)"""",
+            ),
+            Regex(
+                """\\"campaign\\"\s*:\s*\{\\"data\\"\s*:\s*\{[^{}]*\\"id\\"\s*:\s*\\"(\d+)\\"""",
             ),
             Regex(
                 """https:\\/\\/www\.patreon\.com\\/api\\/campaigns\\/(\d+)""",
+            ),
+            Regex(
+                """https://www\.patreon\.com/api/campaigns/(\d+)""",
             ),
             Regex(
                 """/api/campaigns/(\d+)""",
@@ -864,8 +894,6 @@ abstract class Patreon :
             Regex("""/campaign/(\d+)/""")
 
         private val PAGE_CURSOR_REGEX =
-            Regex(
-                """page(?:%5B|\[)cursor(?:%5D|])=([^&]+)""",
-            )
+            Regex("""page(?:%5B|\[)cursor(?:%5D|])=([^&]+)""")
     }
 }

@@ -32,6 +32,7 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -40,6 +41,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.io.IOException
 
 private const val LOG_TAG = "Lezhin"
@@ -69,6 +71,10 @@ abstract class Lezhin :
             else -> "en-US"
         }
 
+    /*
+     * Lezhin's current API implementation uses the
+     * lezhinus.com API host for both EN and KO.
+     */
     private val apiBase =
         "https://www.lezhinus.com/lz-api/v2/"
 
@@ -104,14 +110,12 @@ abstract class Lezhin :
         EditTextPreference(context).apply {
             key = PREF_EMAIL
             title = "Email"
-            summary =
-                "Email used to log in to Lezhin"
+            summary = "Email used to log in to Lezhin"
             dialogTitle = "Lezhin email"
             setDefaultValue("")
 
             setOnPreferenceChangeListener { _, _ ->
                 clearSession()
-
                 true
             }
         }.also(
@@ -121,8 +125,7 @@ abstract class Lezhin :
         EditTextPreference(context).apply {
             key = PREF_PASSWORD
             title = "Password"
-            summary =
-                "Password used to log in to Lezhin"
+            summary = "Password used to log in to Lezhin"
             dialogTitle = "Lezhin password"
             setDefaultValue("")
 
@@ -134,7 +137,6 @@ abstract class Lezhin :
 
             setOnPreferenceChangeListener { _, _ ->
                 clearSession()
-
                 true
             }
         }.also(
@@ -170,9 +172,7 @@ abstract class Lezhin :
         page: Int,
     ): MangasPage {
         val perPage = 500
-
-        val offset =
-            (page - 1) * perPage
+        val offset = (page - 1) * perPage
 
         val url = apiBase
             .toHttpUrl()
@@ -196,12 +196,12 @@ abstract class Lezhin :
             )
             .build()
 
-        val result =
-            apiGet(
-                url = url,
-                adult = true,
-            )
-                .parseAs<LezhinContentListDto>()
+        val result = apiGet(
+            url = url,
+            adult = true,
+        ).use {
+            it.parseAs<LezhinContentListDto>()
+        }
 
         return MangasPage(
             mangas = result.data.map {
@@ -217,7 +217,314 @@ abstract class Lezhin :
 
     override suspend fun getLatestUpdates(
         page: Int,
-    ): MangasPage = getPopularManga(page)
+    ): MangasPage {
+        if (page > 1) {
+            return MangasPage(
+                emptyList(),
+                false,
+            )
+        }
+
+        updateSession()
+
+        /*
+         * The current sites expose their scheduled/update
+         * catalogue through different paths:
+         *
+         * EN -> /en/daily
+         * KO -> /ko/scheduled
+         */
+        val latestPath = when (lang) {
+            "ko" -> "scheduled"
+            else -> "daily"
+        }
+
+        val url =
+            "$baseUrl/$pathSegment/$latestPath"
+
+        val document = client
+            .get(
+                url,
+                authorizedHeaders(
+                    adult = true,
+                ),
+            )
+            .use {
+                it.asJsoup()
+            }
+
+        val mangas =
+            parseLatestMangaList(
+                document,
+            )
+
+        return MangasPage(
+            mangas,
+            false,
+        )
+    }
+
+    private fun parseLatestMangaList(
+        document: Document,
+    ): List<SManga> {
+        val entries = document
+            .select(
+                "a[href*='/$pathSegment/comic/']",
+            )
+            .mapNotNull { anchor ->
+                val mangaUrl =
+                    extractMangaPath(
+                        anchor.attr("href"),
+                    )
+                        ?: return@mapNotNull null
+
+                val alias =
+                    mangaUrl
+                        .substringAfterLast('/')
+                        .takeIf {
+                            it.isNotBlank()
+                        }
+                        ?: return@mapNotNull null
+
+                val title =
+                    extractCardTitle(
+                        anchor = anchor,
+                        alias = alias,
+                    )
+
+                val cover =
+                    extractCardCover(
+                        anchor,
+                    )
+
+                LatestEntry(
+                    manga = SManga
+                        .create()
+                        .apply {
+                            url =
+                                mangaUrl
+
+                            this.title =
+                                title
+
+                            thumbnail_url =
+                                cover
+                        },
+                    updated =
+                    isUpdatedCard(
+                        anchor,
+                    ),
+                )
+            }
+            .distinctBy {
+                it.manga.url
+            }
+
+        /*
+         * Prefer cards currently marked UP/NEW.
+         *
+         * If Lezhin changes/removes those textual markers,
+         * fall back to the complete current schedule rather
+         * than returning an empty Latest list.
+         */
+        val updated =
+            entries
+                .filter {
+                    it.updated
+                }
+                .map {
+                    it.manga
+                }
+
+        return updated.ifEmpty {
+            entries.map {
+                it.manga
+            }
+        }
+    }
+
+    private fun extractMangaPath(
+        value: String,
+    ): String? {
+        if (value.isBlank()) {
+            return null
+        }
+
+        val path = if (
+            value.startsWith(
+                "http://",
+            ) ||
+            value.startsWith(
+                "https://",
+            )
+        ) {
+            value
+                .toHttpUrlOrNull()
+                ?.encodedPath
+                ?: return null
+        } else {
+            value
+                .substringBefore('?')
+                .substringBefore('#')
+                .let {
+                    if (
+                        it.startsWith('/')
+                    ) {
+                        it
+                    } else {
+                        "/$it"
+                    }
+                }
+        }
+
+        if (
+            !path.startsWith(
+                "/$pathSegment/comic/",
+            )
+        ) {
+            return null
+        }
+
+        return path
+    }
+
+    private fun extractCardTitle(
+        anchor: Element,
+        alias: String,
+    ): String {
+        val candidates =
+            listOfNotNull(
+                anchor
+                    .attr("aria-label")
+                    .takeIf {
+                        it.isNotBlank()
+                    },
+                anchor
+                    .attr("title")
+                    .takeIf {
+                        it.isNotBlank()
+                    },
+                anchor
+                    .selectFirst(
+                        "img[alt]",
+                    )
+                    ?.attr("alt")
+                    ?.takeIf {
+                        it.isNotBlank()
+                    },
+                anchor
+                    .selectFirst(
+                        "[class*=title], [class*=Title]",
+                    )
+                    ?.text()
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    },
+                anchor
+                    .selectFirst(
+                        "h2, h3, h4",
+                    )
+                    ?.text()
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    },
+            )
+
+        return candidates
+            .firstOrNull {
+                !isBadgeText(it)
+            }
+            ?: alias
+                .replace(
+                    '_',
+                    ' ',
+                )
+                .replace(
+                    '-',
+                    ' ',
+                )
+    }
+
+    private fun extractCardCover(
+        anchor: Element,
+    ): String? {
+        val image =
+            anchor
+                .selectFirst("img")
+                ?: return null
+
+        val source =
+            image
+                .absUrl("src")
+                .ifEmpty {
+                    image.attr("src")
+                }
+                .ifEmpty {
+                    image.attr("data-src")
+                }
+                .takeIf {
+                    it.isNotBlank() &&
+                        !it.startsWith(
+                            "data:",
+                        )
+                }
+                ?: return null
+
+        return normalizeCoverUrl(
+            source,
+        )
+    }
+
+    private fun isUpdatedCard(
+        anchor: Element,
+    ): Boolean {
+        val badgeTexts =
+            anchor
+                .select(
+                    "span, p, div",
+                )
+                .map {
+                    it.ownText()
+                        .trim()
+                }
+                .filter {
+                    it.isNotBlank()
+                }
+
+        return badgeTexts.any {
+            it.equals(
+                "UP",
+                ignoreCase = true,
+            ) ||
+                it.equals(
+                    "NEW",
+                    ignoreCase = true,
+                ) ||
+                it == "신작"
+        }
+    }
+
+    private fun isBadgeText(
+        value: String,
+    ): Boolean = value.equals(
+        "UP",
+        ignoreCase = true,
+    ) ||
+        value.equals(
+            "NEW",
+            ignoreCase = true,
+        ) ||
+        value.equals(
+            "EVENT",
+            ignoreCase = true,
+        ) ||
+        value.equals(
+            "Zzz",
+            ignoreCase = true,
+        ) ||
+        value == "신작"
 
     // ============================== Search ===============================
 
@@ -227,22 +534,26 @@ abstract class Lezhin :
         filters: FilterList,
     ): MangasPage {
         val perPage = 30
-
-        val offset =
-            (page - 1) * perPage
+        val offset = (page - 1) * perPage
 
         val selectedIds =
-            selectedTagIds(filters)
+            selectedTagIds(
+                filters,
+            )
 
         val selectedNames =
-            selectedTagNames(filters)
+            selectedTagNames(
+                filters,
+            )
 
         if (
             query.isBlank() &&
             selectedIds.isEmpty() &&
             selectedNames.isEmpty()
         ) {
-            return getPopularManga(page)
+            return getPopularManga(
+                page,
+            )
         }
 
         val url = if (
@@ -253,7 +564,8 @@ abstract class Lezhin :
                 .newBuilder()
                 .addQueryParameter(
                     "int_id",
-                    selectedIds.joinToString(","),
+                    selectedIds
+                        .joinToString(","),
                 )
                 .addQueryParameter(
                     "ext_id",
@@ -306,23 +618,25 @@ abstract class Lezhin :
                 )
                 .apply {
                     if (
-                        selectedNames.isNotEmpty()
+                        selectedNames
+                            .isNotEmpty()
                     ) {
                         addQueryParameter(
                             "tags",
-                            selectedNames.joinToString(","),
+                            selectedNames
+                                .joinToString(","),
                         )
                     }
                 }
                 .build()
         }
 
-        val result =
-            apiGet(
-                url = url,
-                adult = true,
-            )
-                .parseAs<LezhinContentListDto>()
+        val result = apiGet(
+            url = url,
+            adult = true,
+        ).use {
+            it.parseAs<LezhinContentListDto>()
+        }
 
         return MangasPage(
             mangas = result.data.map {
@@ -330,7 +644,8 @@ abstract class Lezhin :
                     pathSegment,
                 )
             },
-            hasNextPage = result.hasNext,
+            hasNextPage =
+            result.hasNext,
         )
     }
 
@@ -338,9 +653,6 @@ abstract class Lezhin :
 
     override val supportsFilterFetching =
         true
-
-    override val filterFetchHint =
-        "Tap 'Reset' to load Lezhin tags"
 
     override suspend fun fetchFilterData(): JsonElement {
         updateSession()
@@ -380,35 +692,41 @@ abstract class Lezhin :
                     html,
                 )
 
-        if (divisions.isEmpty()) {
+        if (
+            divisions.isEmpty()
+        ) {
             throw IOException(
                 "Unable to load Lezhin tags",
             )
         }
 
-        return divisions.toJsonElement()
+        return divisions
+            .toJsonElement()
     }
 
     override fun getFilterList(
         data: JsonElement?,
     ): FilterList {
-        if (data == null) {
+        if (
+            data == null
+        ) {
             return FilterList()
         }
 
-        val divisions = runCatching {
-            data.parseAs<
-                List<LezhinDivision>,
-                >()
-        }.getOrElse {
-            Log.e(
-                LOG_TAG,
-                "Failed to parse cached filters",
-                it,
-            )
+        val divisions =
+            runCatching {
+                data.parseAs<
+                    List<LezhinDivision>,
+                    >()
+            }.getOrElse {
+                Log.e(
+                    LOG_TAG,
+                    "Failed to parse cached filters",
+                    it,
+                )
 
-            emptyList()
-        }
+                emptyList()
+            }
 
         return divisionsToFilterList(
             divisions,
@@ -421,7 +739,8 @@ abstract class Lezhin :
         url: HttpUrl,
     ): SManga? {
         if (
-            url.host != sourceHost
+            url.host !=
+            sourceHost
         ) {
             return null
         }
@@ -442,24 +761,28 @@ abstract class Lezhin :
             segments
                 .getOrNull(2)
                 ?.takeIf {
-                    it.isNotEmpty()
+                    it.isNotBlank()
                 }
                 ?: return null
 
         updateSession()
 
-        val manga = SManga
-            .create()
-            .apply {
-                this.url =
-                    "/$pathSegment/comic/$alias"
+        val manga =
+            SManga
+                .create()
+                .apply {
+                    this.url =
+                        "/$pathSegment/comic/$alias"
 
-                title = alias
-            }
+                    title =
+                        alias
+                }
 
         val document = client
             .get(
-                "$baseUrl${manga.url}",
+                resolveSourceUrl(
+                    manga.url,
+                ),
                 authorizedHeaders(
                     adult = true,
                 ),
@@ -482,11 +805,23 @@ abstract class Lezhin :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
+        if (
+            !fetchDetails &&
+            !fetchChapters
+        ) {
+            return SMangaUpdate(
+                manga = manga,
+                chapters = chapters,
+            )
+        }
+
         updateSession()
 
         val document = client
             .get(
-                "$baseUrl${manga.url}",
+                resolveSourceUrl(
+                    manga.url,
+                ),
                 authorizedHeaders(
                     adult = true,
                 ),
@@ -496,14 +831,28 @@ abstract class Lezhin :
             }
 
         return SMangaUpdate(
-            manga = parseMangaDetails(
-                document = document,
-                manga = manga,
-            ),
-            chapters = parseChapterList(
-                document = document,
-                manga = manga,
-            ),
+            manga =
+            if (
+                fetchDetails
+            ) {
+                parseMangaDetails(
+                    document = document,
+                    manga = manga,
+                )
+            } else {
+                manga
+            },
+            chapters =
+            if (
+                fetchChapters
+            ) {
+                parseChapterList(
+                    document = document,
+                    manga = manga,
+                )
+            } else {
+                chapters
+            },
         )
     }
 
@@ -512,39 +861,52 @@ abstract class Lezhin :
         manga: SManga,
     ): SManga {
         val title =
-            document.selectFirst(
-                "div.lzSection p[class*=-Head3xl]",
-            )
+            document
+                .selectFirst(
+                    "div.lzSection p[class*=-Head3xl]",
+                )
                 ?.text()
+                ?.trim()
                 ?.takeIf {
-                    it.isNotEmpty()
+                    it.isNotBlank()
                 }
                 ?: document
-                    .selectFirst("h1")
+                    .selectFirst(
+                        "h1",
+                    )
                     ?.text()
+                    ?.trim()
                     ?.takeIf {
-                        it.isNotEmpty()
+                        it.isNotBlank()
                     }
                 ?: document
                     .title()
+                    .trim()
                     .takeIf {
-                        it.isNotEmpty()
+                        it.isNotBlank()
                     }
                 ?: manga.title
 
         val description =
-            document.selectFirst(
-                "meta[name=description]",
-            )
-                ?.attr("content")
+            document
+                .selectFirst(
+                    "meta[name=description]",
+                )
+                ?.attr(
+                    "content",
+                )
+                ?.trim()
                 ?.takeIf {
-                    it.isNotEmpty()
+                    it.isNotBlank()
                 }
                 ?: document
-                    .selectFirst("p.summary")
+                    .selectFirst(
+                        "p.summary",
+                    )
                     ?.text()
+                    ?.trim()
                     ?.takeIf {
-                        it.isNotEmpty()
+                        it.isNotBlank()
                     }
 
         val coverCandidates =
@@ -558,13 +920,14 @@ abstract class Lezhin :
                 val source =
                     image
                         .absUrl("src")
-                        .takeIf {
-                            it.isNotEmpty()
+                        .ifEmpty {
+                            image.attr(
+                                "src",
+                            )
                         }
-                        ?: image.attr("src")
 
                 if (
-                    source.isNotEmpty()
+                    source.isNotBlank()
                 ) {
                     coverCandidates +=
                         source
@@ -580,13 +943,14 @@ abstract class Lezhin :
                 val source =
                     image
                         .absUrl("src")
-                        .takeIf {
-                            it.isNotEmpty()
+                        .ifEmpty {
+                            image.attr(
+                                "src",
+                            )
                         }
-                        ?: image.attr("src")
 
                 if (
-                    source.isNotEmpty()
+                    source.isNotBlank()
                 ) {
                     coverCandidates +=
                         source
@@ -597,9 +961,12 @@ abstract class Lezhin :
             .selectFirst(
                 "meta[property=og:image]",
             )
-            ?.attr("content")
+            ?.attr(
+                "content",
+            )
+            ?.trim()
             ?.takeIf {
-                it.isNotEmpty()
+                it.isNotBlank()
             }
             ?.let(
                 coverCandidates::add,
@@ -611,15 +978,7 @@ abstract class Lezhin :
                     it.contains(
                         "/images/tall",
                         ignoreCase = true,
-                    ) ||
-                        it.endsWith(
-                            "tall.jpg",
-                            ignoreCase = true,
-                        ) ||
-                        it.endsWith(
-                            "tall.webp",
-                            ignoreCase = true,
-                        )
+                    )
                 }
                 ?: coverCandidates
                     .firstOrNull()
@@ -638,29 +997,39 @@ abstract class Lezhin :
                 ".episodeListDetail__artist__MWexm",
             )
             .forEach { node ->
-                val role = node
-                    .selectFirst(
-                        ".episodeListDetail__artistName__gD_OK",
-                    )
-                    ?.text()
-                    ?.lowercase()
-                    ?: node
-                        .selectFirst("span")
+                val role =
+                    node
+                        .selectFirst(
+                            ".episodeListDetail__artistName__gD_OK",
+                        )
                         ?.text()
+                        ?.trim()
                         ?.lowercase()
+                        ?: node
+                            .selectFirst(
+                                "span",
+                            )
+                            ?.text()
+                            ?.trim()
+                            ?.lowercase()
 
-                val creator = node
-                    .selectFirst("a")
-                    ?.text()
-                    ?.takeIf {
-                        it.isNotEmpty()
-                    }
-                    ?: node
-                        .ownText()
-                        .takeIf {
-                            it.isNotEmpty()
+                val creator =
+                    node
+                        .selectFirst(
+                            "a",
+                        )
+                        ?.text()
+                        ?.trim()
+                        ?.takeIf {
+                            it.isNotBlank()
                         }
-                    ?: return@forEach
+                        ?: node
+                            .ownText()
+                            .trim()
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+                        ?: return@forEach
 
                 when {
                     role?.contains(
@@ -671,8 +1040,16 @@ abstract class Lezhin :
                         ) == true ||
                         role?.contains(
                             "script",
-                        ) == true -> {
-                        authors += creator
+                        ) == true ||
+                        role?.contains(
+                            "story",
+                        ) == true ||
+                        role?.contains(
+                            "스토리",
+                        ) == true ||
+                        role == "글" -> {
+                        authors +=
+                            creator
                     }
 
                     role?.contains(
@@ -680,8 +1057,12 @@ abstract class Lezhin :
                     ) == true ||
                         role?.contains(
                             "artist",
+                        ) == true ||
+                        role?.contains(
+                            "그림",
                         ) == true -> {
-                        artists += creator
+                        artists +=
+                            creator
                     }
 
                     role?.contains(
@@ -689,59 +1070,83 @@ abstract class Lezhin :
                     ) == true ||
                         role?.contains(
                             "origin",
+                        ) == true ||
+                        role?.contains(
+                            "원작",
                         ) == true -> {
-                        originals += creator
+                        originals +=
+                            creator
                     }
 
                     else -> {
-                        authors += creator
+                        authors +=
+                            creator
                     }
                 }
             }
 
-        val tags = document
-            .select(
-                "a[href*=/tags/]",
-            )
-            .map {
-                it.text()
-            }
-            .filter {
-                it.isNotEmpty()
-            }
-            .distinct()
+        val tags =
+            document
+                .select(
+                    "a[href*=/tags/]",
+                )
+                .map {
+                    it.text()
+                        .trim()
+                }
+                .filter {
+                    it.isNotBlank()
+                }
+                .distinct()
 
         val pageText =
             document.text()
 
-        val status = when {
-            pageText.contains(
-                "COMPLETED",
-                ignoreCase = true,
-            ) ||
+        val status =
+            when {
                 pageText.contains(
-                    "COMPLETE",
+                    "COMPLETED",
                     ignoreCase = true,
-                ) -> {
-                SManga.COMPLETED
+                ) ||
+                    pageText.contains(
+                        "COMPLETE",
+                        ignoreCase = true,
+                    ) ||
+                    pageText.contains(
+                        "완결",
+                    ) -> {
+                    SManga.COMPLETED
+                }
+
+                pageText.contains(
+                    "NEW",
+                    ignoreCase = true,
+                ) ||
+                    pageText.contains(
+                        "신작",
+                    ) -> {
+                    SManga.ONGOING
+                }
+
+                else -> {
+                    manga.status
+                }
             }
 
-            pageText.contains(
-                "NEW",
-                ignoreCase = true,
-            ) -> {
-                SManga.ONGOING
-            }
-
-            else -> {
-                manga.status
-            }
-        }
+        val normalizedCover =
+            normalizeCoverUrl(
+                url =
+                selectedCover
+                    ?: manga.thumbnail_url,
+                fallbackUrl =
+                manga.thumbnail_url,
+            )
 
         return SManga
             .create()
             .apply {
-                url = manga.url
+                url =
+                    manga.url
 
                 this.title =
                     title
@@ -759,7 +1164,8 @@ abstract class Lezhin :
 
                 author =
                     if (
-                        combinedAuthors.isNotEmpty()
+                        combinedAuthors
+                            .isNotEmpty()
                     ) {
                         combinedAuthors
                             .joinToString(", ")
@@ -769,7 +1175,8 @@ abstract class Lezhin :
 
                 artist =
                     if (
-                        artists.isNotEmpty()
+                        artists
+                            .isNotEmpty()
                     ) {
                         artists
                             .distinct()
@@ -780,9 +1187,11 @@ abstract class Lezhin :
 
                 genre =
                     if (
-                        tags.isNotEmpty()
+                        tags
+                            .isNotEmpty()
                     ) {
-                        tags.joinToString(", ")
+                        tags
+                            .joinToString(", ")
                     } else {
                         manga.genre
                     }
@@ -791,40 +1200,159 @@ abstract class Lezhin :
                     status
 
                 thumbnail_url =
-                    selectedCover
-                        ?.let { cover ->
-                            if (
-                                cover.contains(
-                                    "/images/wide",
-                                    ignoreCase = true,
-                                )
-                            ) {
-                                cover.replace(
-                                    "/images/wide",
-                                    "/images/tall",
-                                    ignoreCase = true,
-                                )
-                            } else {
-                                cover
-                            }
-                        }
+                    normalizedCover
                         ?: manga.thumbnail_url
             }
+    }
+
+    private fun normalizeCoverUrl(
+        url: String?,
+        fallbackUrl: String? = null,
+    ): String? {
+        val unwrapped =
+            unwrapImageUrl(
+                url,
+            )
+                ?: return fallbackUrl
+
+        val tall =
+            unwrapped.replace(
+                "/images/wide",
+                "/images/tall",
+                ignoreCase = true,
+            )
+
+        val parsed =
+            tall.toHttpUrlOrNull()
+                ?: return tall
+
+        if (
+            parsed.host !=
+            "ccdn.lezhin.com" ||
+            !parsed.encodedPath
+                .contains(
+                    "/images/tall",
+                    ignoreCase = true,
+                )
+        ) {
+            return tall
+        }
+
+        val fallbackUpdated =
+            unwrapImageUrl(
+                fallbackUrl,
+            )
+                ?.toHttpUrlOrNull()
+                ?.queryParameter(
+                    "updated",
+                )
+
+        val updated =
+            parsed.queryParameter(
+                "updated",
+            )
+                ?: fallbackUpdated
+
+        val webpPath =
+            parsed.encodedPath
+                .replace(
+                    Regex(
+                        """\.(?:jpg|jpeg|png|webp)$""",
+                        RegexOption.IGNORE_CASE,
+                    ),
+                    ".webp",
+                )
+
+        val builder =
+            parsed
+                .newBuilder()
+                .encodedPath(
+                    webpPath,
+                )
+
+        parsed
+            .queryParameterNames
+            .forEach {
+                builder
+                    .removeAllQueryParameters(
+                        it,
+                    )
+            }
+
+        if (
+            !updated.isNullOrBlank()
+        ) {
+            builder
+                .addQueryParameter(
+                    "updated",
+                    updated,
+                )
+        }
+
+        builder
+            .addQueryParameter(
+                "width",
+                "1200",
+            )
+
+        return builder
+            .build()
+            .toString()
+    }
+
+    private fun unwrapImageUrl(
+        value: String?,
+    ): String? {
+        val source =
+            value
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return null
+
+        val parsed =
+            source
+                .toHttpUrlOrNull()
+                ?: return source
+
+        if (
+            parsed.encodedPath
+                .contains(
+                    "/_next/image",
+                )
+        ) {
+            return parsed
+                .queryParameter(
+                    "url",
+                )
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: source
+        }
+
+        return source
     }
 
     private fun parseChapterList(
         document: Document,
         manga: SManga,
     ): List<SChapter> {
-        val hydrated = document
-            .extractNextJs<
-                LezhinHydratedChaptersDto,
-                > { element ->
-                element is JsonObject &&
-                    "episodes" in element
-            }
+        val hydrated =
+            document
+                .extractNextJs<
+                    LezhinHydratedChaptersDto,
+                    > { element ->
+                    element is
+                        JsonObject &&
+                        "episodes" in
+                        element
+                }
 
-        if (hydrated != null) {
+        if (
+            hydrated != null
+        ) {
             return hydrated
                 .episodes
                 .map { episode ->
@@ -842,16 +1370,28 @@ abstract class Lezhin :
                                     .display
                                     .title
 
-                            parseChapterNumber(
-                                episode.name,
-                            )?.let {
-                                chapter_number =
-                                    it
-                            }
+                            (
+                                parseChapterNumber(
+                                    episode
+                                        .display
+                                        .title,
+                                )
+                                    ?: parseChapterNumber(
+                                        episode.name,
+                                    )
+                                )
+                                ?.let {
+                                    chapter_number =
+                                        it
+                                }
                         }
                 }
         }
 
+        /*
+         * HTML fallback in case Lezhin temporarily does
+         * not emit the hydrated episode data.
+         */
         return document
             .select(
                 "div[data-id] a[href]",
@@ -859,39 +1399,57 @@ abstract class Lezhin :
             .mapNotNull { anchor ->
                 val href =
                     anchor
-                        .attr("href")
+                        .attr(
+                            "href",
+                        )
+                        .trim()
                         .takeIf {
-                            it.isNotEmpty()
+                            it.isNotBlank()
                         }
                         ?: return@mapNotNull null
 
                 val title =
                     anchor
-                        .selectFirst("h3")
+                        .selectFirst(
+                            "h3",
+                        )
                         ?.text()
+                        ?.trim()
                         ?.takeIf {
-                            it.isNotEmpty()
+                            it.isNotBlank()
                         }
                         ?: anchor
                             .text()
+                            .trim()
                             .takeIf {
-                                it.isNotEmpty()
+                                it.isNotBlank()
                             }
                         ?: return@mapNotNull null
 
                 SChapter
                     .create()
                     .apply {
-                        url = href
-                        name = title
-
-                        parseChapterNumber(
+                        url =
                             href
-                                .substringAfterLast('/'),
-                        )?.let {
-                            chapter_number =
-                                it
-                        }
+
+                        name =
+                            title
+
+                        (
+                            parseChapterNumber(
+                                title,
+                            )
+                                ?: parseChapterNumber(
+                                    href
+                                        .substringAfterLast(
+                                            '/',
+                                        ),
+                                )
+                            )
+                            ?.let {
+                                chapter_number =
+                                    it
+                            }
                     }
             }
     }
@@ -901,7 +1459,9 @@ abstract class Lezhin :
     ): Float? = Regex(
         """\d+(?:\.\d+)?""",
     )
-        .find(value)
+        .find(
+            value,
+        )
         ?.value
         ?.toFloatOrNull()
 
@@ -912,9 +1472,14 @@ abstract class Lezhin :
     ): List<Page> {
         updateSession()
 
+        val chapterUrl =
+            resolveSourceUrl(
+                chapter.url,
+            )
+
         val document = client
             .get(
-                "$baseUrl${chapter.url}",
+                chapterUrl,
                 authorizedHeaders(
                     adult = true,
                 ),
@@ -923,16 +1488,19 @@ abstract class Lezhin :
                 it.asJsoup()
             }
 
-        val queries = document
-            .extractNextJs<
-                LezhinQueriesDto,
-                > { element ->
-                element is JsonObject &&
-                    "queries" in element
-            }
-            ?: throw IOException(
-                "Chapter is unavailable",
-            )
+        val queries =
+            document
+                .extractNextJs<
+                    LezhinQueriesDto,
+                    > { element ->
+                    element is
+                        JsonObject &&
+                        "queries" in
+                        element
+                }
+                ?: throw IOException(
+                    "Chapter is unavailable",
+                )
 
         val pagesQuery =
             queries
@@ -1001,14 +1569,18 @@ abstract class Lezhin :
                         "contents"
                 }
 
-        if (media.isEmpty()) {
+        if (
+            media.isEmpty()
+        ) {
             throw IOException(
                 "No readable pages found. " +
                     "This chapter may be locked or unavailable.",
             )
         }
 
-        if (cdnBase == null) {
+        if (
+            cdnBase == null
+        ) {
             updateCdn(
                 forced = true,
             )
@@ -1020,65 +1592,77 @@ abstract class Lezhin :
                     "Unable to determine Lezhin CDN",
                 )
 
-        return media.mapIndexed {
-                index,
-                item,
-            ->
+        return media
+            .mapIndexed {
+                    index,
+                    item,
+                ->
 
-            val imageUrl =
-                cdn.trimEnd('/') +
-                    "/v2" +
-                    item.path +
-                    imageFormat
+                val imageUrl =
+                    cdn.trimEnd('/') +
+                        "/v2" +
+                        item.path +
+                        imageFormat
 
-            val metadata =
-                buildString {
-                    append(
-                        "lezhin_comic=",
-                    )
-                    append(
-                        viewer.comic.id,
-                    )
-                    append(";episode=")
-                    append(
-                        viewer.episode.id,
-                    )
-                    append(";purchased=")
-                    append(
-                        status.isPurchased,
-                    )
-                    append(";updated=")
-                    append(
-                        viewer.episode.updatedAt,
-                    )
-                    append(";shuffle=")
-                    append(
-                        viewer
-                            .media
-                            .imageShuffle,
-                    )
-                }
+                val metadata =
+                    buildString {
+                        append(
+                            "lezhin_comic=",
+                        )
+                        append(
+                            viewer.comic.id,
+                        )
+                        append(
+                            ";episode=",
+                        )
+                        append(
+                            viewer.episode.id,
+                        )
+                        append(
+                            ";purchased=",
+                        )
+                        append(
+                            status.isPurchased,
+                        )
+                        append(
+                            ";updated=",
+                        )
+                        append(
+                            viewer.episode.updatedAt,
+                        )
+                        append(
+                            ";shuffle=",
+                        )
+                        append(
+                            viewer
+                                .media
+                                .imageShuffle,
+                        )
+                    }
 
-            val pageUrl =
-                imageUrl
-                    .toHttpUrl()
-                    .newBuilder()
-                    .fragment(metadata)
-                    .build()
-                    .toString()
+                val pageUrl =
+                    imageUrl
+                        .toHttpUrl()
+                        .newBuilder()
+                        .fragment(
+                            metadata,
+                        )
+                        .build()
+                        .toString()
 
-            Page(
-                index = index,
-                url = pageUrl,
-            )
-        }
+                Page(
+                    index = index,
+                    url = pageUrl,
+                )
+            }
     }
 
     override suspend fun getImageUrl(
         page: Page,
     ): String {
         val pageUrl =
-            page.url.toHttpUrl()
+            page.url
+                .toHttpUrl()
 
         val parameters =
             parseFragmentParameters(
@@ -1130,20 +1714,28 @@ abstract class Lezhin :
         val unsignedImageUrl =
             pageUrl
                 .newBuilder()
-                .fragment(null)
+                .fragment(
+                    null,
+                )
                 .build()
 
         val signed =
             createSignedImageUrl(
-                comicId = comicId,
-                episodeId = episodeId,
-                purchased = purchased,
-                updatedAt = updatedAt,
+                comicId =
+                comicId,
+                episodeId =
+                episodeId,
+                purchased =
+                purchased,
+                updatedAt =
+                updatedAt,
                 imageUrl =
                 unsignedImageUrl,
             )
 
-        return if (shuffled) {
+        return if (
+            shuffled
+        ) {
             signed
                 .newBuilder()
                 .fragment(
@@ -1152,7 +1744,8 @@ abstract class Lezhin :
                 .build()
                 .toString()
         } else {
-            signed.toString()
+            signed
+                .toString()
         }
     }
 
@@ -1191,11 +1784,14 @@ abstract class Lezhin :
 
         val keyPair =
             apiGet(
-                url = signingUrl,
+                url =
+                signingUrl,
             )
-                .parseAs<
-                    LezhinSignedUrlResponseDto,
-                    >()
+                .use {
+                    it.parseAs<
+                        LezhinSignedUrlResponseDto,
+                        >()
+                }
                 .data
 
         return imageUrl
@@ -1254,124 +1850,130 @@ abstract class Lezhin :
     private suspend fun updateSession(
         force: Boolean = false,
     ) {
-        sessionMutex.withLock {
-            if (
-                !force &&
-                sessionInitialized &&
-                !tokenExpired()
-            ) {
-                return
-            }
+        sessionMutex
+            .withLock {
+                if (
+                    !force &&
+                    sessionInitialized &&
+                    !tokenExpired()
+                ) {
+                    return
+                }
 
-            val email =
-                preferences
-                    .getString(
-                        PREF_EMAIL,
-                        "",
-                    )
-                    .orEmpty()
+                if (
+                    force
+                ) {
+                    clearAuth()
+                }
 
-            val password =
-                preferences
-                    .getString(
-                        PREF_PASSWORD,
-                        "",
-                    )
-                    .orEmpty()
+                val email =
+                    preferences
+                        .getString(
+                            PREF_EMAIL,
+                            "",
+                        )
+                        .orEmpty()
 
-            val hasCredentials =
-                email.isNotBlank() &&
-                    password.isNotBlank()
+                val password =
+                    preferences
+                        .getString(
+                            PREF_PASSWORD,
+                            "",
+                        )
+                        .orEmpty()
 
-            val token =
-                currentToken()
+                val hasCredentials =
+                    email.isNotBlank() &&
+                        password.isNotBlank()
 
-            if (
-                force ||
-                token.isNullOrBlank() ||
-                tokenExpired() ||
-                (
+                if (
+                    currentToken()
+                        .isNullOrBlank() ||
+                    tokenExpired()
+                ) {
+                    fetchHydratedAuth()
+                        ?.takeIf {
+                            !it
+                                .accessToken
+                                .isNullOrBlank()
+                        }
+                        ?.let(
+                            ::saveAuth,
+                        )
+                }
+
+                if (
                     hasCredentials &&
-                        !isLogged()
-                    )
-            ) {
-                fetchHydratedAuth()
-                    ?.takeIf {
-                        !it.accessToken
-                            .isNullOrBlank()
-                    }
-                    ?.let(
-                        ::saveAuth,
-                    )
-            }
-
-            if (
-                hasCredentials &&
-                (
-                    force ||
+                    (
                         !isLogged() ||
-                        tokenExpired()
+                            currentToken()
+                                .isNullOrBlank() ||
+                            tokenExpired()
+                        )
+                ) {
+                    loginWithWebView(
+                        email =
+                        email,
+                        password =
+                        password,
                     )
-            ) {
-                loginWithWebView(
-                    email = email,
-                    password = password,
-                )
-                    ?.takeIf {
-                        !it.accessToken
-                            .isNullOrBlank()
-                    }
-                    ?.let(
-                        ::saveAuth,
-                    )
+                        ?.takeIf {
+                            !it
+                                .accessToken
+                                .isNullOrBlank()
+                        }
+                        ?.let(
+                            ::saveAuth,
+                        )
+                }
+
+                if (
+                    tokenExpired()
+                ) {
+                    clearAuth()
+                }
+
+                if (
+                    isLogged() &&
+                    !currentToken()
+                        .isNullOrBlank()
+                ) {
+                    forceLanguage()
+                }
+
+                sessionInitialized =
+                    true
             }
-
-            if (
-                tokenExpired()
-            ) {
-                clearAuth()
-            }
-
-            if (
-                isLogged() &&
-                !currentToken()
-                    .isNullOrBlank()
-            ) {
-                forceLanguage()
-            }
-
-            updateCdn(
-                forced = force,
-            )
-
-            sessionInitialized =
-                true
-        }
     }
 
     private suspend fun fetchHydratedAuth(): LezhinAuthDto? {
         return try {
-            val document = client
-                .get(
-                    baseUrl,
-                    headers,
-                    ensureSuccess = false,
-                )
-                .use { response ->
-                    if (
-                        !response.isSuccessful
-                    ) {
-                        return null
-                    }
+            val document =
+                client
+                    .get(
+                        baseUrl,
+                        headers,
+                        ensureSuccess =
+                        false,
+                    )
+                    .use { response ->
+                        if (
+                            !response
+                                .isSuccessful
+                        ) {
+                            return null
+                        }
 
-                    response.asJsoup()
-                }
+                        response
+                            .asJsoup()
+                    }
 
             document
                 .extractNextJs<
                     LezhinAuthDto,
                     > { element ->
-                    element is JsonObject &&
+                    element is
+                        JsonObject &&
                         "accessToken" in
                         element
                 }
@@ -1392,19 +1994,23 @@ abstract class Lezhin :
     ): LezhinAuthDto? {
         return try {
             val emailJs =
-                email.toJsonString()
+                email
+                    .toJsonString()
 
             val passwordJs =
-                password.toJsonString()
-
-            val languageJs =
-                pathSegment.toJsonString()
+                password
+                    .toJsonString()
 
             val result =
                 runWebView {
-                    blockImages = true
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
+                    blockImages =
+                        true
+
+                    javaScriptEnabled =
+                        true
+
+                    domStorageEnabled =
+                        true
 
                     var submitted =
                         false
@@ -1412,22 +2018,30 @@ abstract class Lezhin :
                     jsBridge(
                         LOGIN_BRIDGE,
                     ) { message ->
-                        resolve(message)
+                        resolve(
+                            message,
+                        )
                     }
 
                     onPageFinished {
-                        if (submitted) {
+                        if (
+                            submitted
+                        ) {
                             return@onPageFinished
                         }
 
-                        submitted = true
+                        submitted =
+                            true
 
                         evaluateJs(
                             """
                             (async () => {
                                 try {
                                     const response = await fetch(
-                                        new URL('/api/authentication/login', window.location.origin),
+                                        new URL(
+                                            '/api/authentication/login',
+                                            window.location.origin
+                                        ),
                                         {
                                             method: 'POST',
                                             headers: {
@@ -1436,15 +2050,22 @@ abstract class Lezhin :
                                             body: JSON.stringify({
                                                 email: $emailJs,
                                                 password: $passwordJs,
-                                                remember: false,
+                                                remember: 'false',
                                                 provider: 'email',
-                                                language: $languageJs
+                                                language: JSON.stringify(
+                                                    window.location.pathname
+                                                        .split('/')
+                                                        .at(1)
+                                                )
                                             })
                                         }
                                     );
 
                                     const text = await response.text();
-                                    window.$LOGIN_BRIDGE.post(text);
+
+                                    window.$LOGIN_BRIDGE.post(
+                                        text
+                                    );
                                 } catch (error) {
                                     window.$LOGIN_BRIDGE.post(
                                         JSON.stringify({
@@ -1463,12 +2084,15 @@ abstract class Lezhin :
                 }
 
             val root =
-                JSONObject(result)
+                JSONObject(
+                    result,
+                )
 
             val appConfig =
-                root.optJSONObject(
-                    "appConfig",
-                )
+                root
+                    .optJSONObject(
+                        "appConfig",
+                    )
                     ?: return null
 
             val accessToken =
@@ -1483,17 +2107,21 @@ abstract class Lezhin :
 
             val userId =
                 if (
-                    appConfig.has("id")
-                ) {
-                    appConfig.optLong(
+                    appConfig.has(
                         "id",
                     )
+                ) {
+                    appConfig
+                        .optLong(
+                            "id",
+                        )
                 } else {
                     null
                 }
 
             LezhinAuthDto(
-                id = userId,
+                id =
+                userId,
                 accessToken =
                 accessToken,
             )
@@ -1529,7 +2157,8 @@ abstract class Lezhin :
                     "$baseUrl/api/locale",
                     authorizedHeaders(),
                     body,
-                    ensureSuccess = false,
+                    ensureSuccess =
+                    false,
                 )
                 .close()
 
@@ -1556,69 +2185,100 @@ abstract class Lezhin :
             return
         }
 
-        val html = try {
-            client
-                .get(
-                    "$baseUrl/account",
-                    authorizedHeaders(),
-                    ensureSuccess = false,
-                )
-                .use { response ->
-                    if (
-                        response.isSuccessful
-                    ) {
-                        response.body.string()
-                    } else {
-                        ""
+        val html =
+            try {
+                client
+                    .get(
+                        "$baseUrl/account",
+                        authorizedHeaders(),
+                        ensureSuccess =
+                        false,
+                    )
+                    .use { response ->
+                        if (
+                            response
+                                .isSuccessful
+                        ) {
+                            response
+                                .body
+                                .string()
+                        } else {
+                            ""
+                        }
                     }
-                }
-        } catch (_: Throwable) {
-            ""
-        }
+            } catch (_: Throwable) {
+                ""
+            }
 
         extractCdnFromHtml(
             html,
-        )?.let {
-            cdnBase = it
+        )
+            ?.let {
+                cdnBase =
+                    it
 
-            return
-        }
-
-        val webViewCdn = runCatching {
-            runWebView {
-                blockImages = true
-
-                onPageFinished {
-                    evaluateJs(
-                        """
-                        (() => {
-                            try {
-                                return (
-                                    window.__LZ_CONFIG__?.contentsCdnUrl ??
-                                    JSON.parse(
-                                        document.querySelector('#lz-static')?.dataset?.env ?? '{}'
-                                    ).CONTENT_CDN_URL ??
-                                    null
-                                );
-                            } catch (_) {
-                                return null;
-                            }
-                        })()
-                        """.trimIndent(),
-                    ) { value ->
-                        resolve(
-                            value.parseAs<
-                                String?,
-                                >(),
-                        )
-                    }
-                }
-
-                loadUrl(
-                    "$baseUrl/account",
-                )
+                return
             }
-        }.getOrNull()
+
+        val webViewCdn =
+            runCatching {
+                runWebView {
+                    blockImages =
+                        true
+
+                    onPageFinished {
+                        evaluateJs(
+                            """
+                            (() => {
+                                try {
+                                    return (
+                                        window.__LZ_CONFIG__
+                                            ?.contentsCdnUrl ??
+                                        JSON.parse(
+                                            document
+                                                .querySelector('#lz-static')
+                                                ?.dataset
+                                                ?.env ?? '{}'
+                                        ).CONTENT_CDN_URL ??
+                                        null
+                                    );
+                                } catch (_) {
+                                    return null;
+                                }
+                            })()
+                            """.trimIndent(),
+                        ) { value ->
+                            resolve(
+                                value.parseAs<
+                                    String?,
+                                    >(),
+                            )
+                        }
+                    }
+
+                    val webViewHeaders =
+                        buildMap {
+                            put(
+                                "x-lz-locale",
+                                siteLocale,
+                            )
+
+                            currentToken()
+                                ?.let { token ->
+                                    put(
+                                        "Authorization",
+                                        "Bearer $token",
+                                    )
+                                }
+                        }
+
+                    loadUrl(
+                        "$baseUrl/account",
+                        webViewHeaders,
+                    )
+                }
+            }
+                .getOrNull()
 
         cdnBase =
             webViewCdn
@@ -1630,16 +2290,22 @@ abstract class Lezhin :
     private fun extractCdnFromHtml(
         html: String,
     ): String? {
-        if (html.isBlank()) {
+        if (
+            html.isBlank()
+        ) {
             return null
         }
 
         Regex(
             """["']?contentsCdnUrl["']?\s*[:=]\s*["']([^"']+)["']""",
         )
-            .find(html)
+            .find(
+                html,
+            )
             ?.groupValues
-            ?.getOrNull(1)
+            ?.getOrNull(
+                1,
+            )
             ?.replace(
                 "\\/",
                 "/",
@@ -1652,7 +2318,9 @@ abstract class Lezhin :
             }
 
         val document =
-            Jsoup.parse(html)
+            Jsoup.parse(
+                html,
+            )
 
         val environment =
             document
@@ -1677,7 +2345,8 @@ abstract class Lezhin :
                 .takeIf {
                     it.isNotBlank()
                 }
-        }.getOrNull()
+        }
+            .getOrNull()
     }
 
     // ============================== Token ================================
@@ -1686,7 +2355,8 @@ abstract class Lezhin :
         auth: LezhinAuthDto,
     ) {
         val token =
-            auth.accessToken
+            auth
+                .accessToken
                 ?.takeIf {
                     it.isNotBlank()
                 }
@@ -1709,14 +2379,17 @@ abstract class Lezhin :
             )
             .apply()
 
+        val userId =
+            auth.id
+
         if (
-            auth.id != null
+            userId != null
         ) {
             preferences
                 .edit()
                 .putString(
                     PREF_USER_ID,
-                    auth.id.toString(),
+                    userId.toString(),
                 )
                 .apply()
         } else {
@@ -1736,7 +2409,9 @@ abstract class Lezhin :
             val segment =
                 token
                     .split('.')
-                    .getOrNull(1)
+                    .getOrNull(
+                        1,
+                    )
                     ?: return@runCatching 0L
 
             val padding =
@@ -1751,7 +2426,8 @@ abstract class Lezhin :
 
             val bytes =
                 Base64.decode(
-                    segment + padding,
+                    segment +
+                        padding,
                     Base64.URL_SAFE or
                         Base64.NO_WRAP,
                 )
@@ -1763,21 +2439,25 @@ abstract class Lezhin :
                     ),
                 )
 
-            json.optLong(
-                "exp",
+            json
+                .optLong(
+                    "exp",
+                    0L,
+                ) *
+                1000L
+        }
+            .getOrDefault(
                 0L,
-            ) * 1000L
-        }.getOrDefault(
-            0L,
-        )
+            )
     }
 
     private fun tokenExpired(): Boolean {
         val expiration =
-            preferences.getLong(
-                PREF_TOKEN_EXPIRES,
-                0L,
-            )
+            preferences
+                .getLong(
+                    PREF_TOKEN_EXPIRES,
+                    0L,
+                )
 
         if (
             expiration == 0L
@@ -1826,7 +2506,9 @@ abstract class Lezhin :
     private fun clearSession() {
         clearAuth()
 
-        cdnBase = null
+        cdnBase =
+            null
+
         sessionInitialized =
             false
     }
@@ -1838,6 +2520,16 @@ abstract class Lezhin :
     ): Headers = headers
         .newBuilder()
         .apply {
+            set(
+                "Origin",
+                baseUrl,
+            )
+
+            set(
+                "Referer",
+                "$baseUrl/",
+            )
+
             currentToken()
                 ?.let { token ->
                     set(
@@ -1846,7 +2538,9 @@ abstract class Lezhin :
                     )
                 }
 
-            if (adult) {
+            if (
+                adult
+            ) {
                 set(
                     "X-LZ-Adult",
                     "2",
@@ -1867,40 +2561,51 @@ abstract class Lezhin :
         updateSession()
 
         var response =
-            client.get(
-                url,
-                authorizedHeaders(
-                    adult = adult,
-                ),
-                ensureSuccess = false,
-            )
+            client
+                .get(
+                    url,
+                    authorizedHeaders(
+                        adult =
+                        adult,
+                    ),
+                    ensureSuccess =
+                    false,
+                )
 
         if (
-            response.code == 401
+            response.code ==
+            401
         ) {
-            response.close()
+            response
+                .close()
 
             updateSession(
-                force = true,
+                force =
+                true,
             )
 
             response =
-                client.get(
-                    url,
-                    authorizedHeaders(
-                        adult = adult,
-                    ),
-                    ensureSuccess = false,
-                )
+                client
+                    .get(
+                        url,
+                        authorizedHeaders(
+                            adult =
+                            adult,
+                        ),
+                        ensureSuccess =
+                        false,
+                    )
         }
 
         if (
-            !response.isSuccessful
+            !response
+                .isSuccessful
         ) {
             val code =
                 response.code
 
-            response.close()
+            response
+                .close()
 
             throw IOException(
                 "Lezhin API returned HTTP $code",
@@ -1908,6 +2613,29 @@ abstract class Lezhin :
         }
 
         return response
+    }
+
+    private fun resolveSourceUrl(
+        value: String,
+    ): String {
+        if (
+            value.startsWith(
+                "http://",
+            ) ||
+            value.startsWith(
+                "https://",
+            )
+        ) {
+            return value
+        }
+
+        return if (
+            value.startsWith('/')
+        ) {
+            "$baseUrl$value"
+        } else {
+            "$baseUrl/$value"
+        }
     }
 
     // ========================== Image Descramble =========================
@@ -1922,18 +2650,21 @@ abstract class Lezhin :
             request
                 .url
                 .fragment
-                ?: return chain.proceed(
-                    request,
-                )
+                ?: return chain
+                    .proceed(
+                        request,
+                    )
 
         if (
-            !fragment.startsWith(
-                "lezhin_eid=",
-            )
+            !fragment
+                .startsWith(
+                    "lezhin_eid=",
+                )
         ) {
-            return chain.proceed(
-                request,
-            )
+            return chain
+                .proceed(
+                    request,
+                )
         }
 
         val parameters =
@@ -1946,9 +2677,10 @@ abstract class Lezhin :
                 "lezhin_eid",
             ]
                 ?.toIntOrNull()
-                ?: return chain.proceed(
-                    request,
-                )
+                ?: return chain
+                    .proceed(
+                        request,
+                    )
 
         val gridSize =
             parameters[
@@ -1958,12 +2690,14 @@ abstract class Lezhin :
                 ?: 5
 
         val response =
-            chain.proceed(
-                request,
-            )
+            chain
+                .proceed(
+                    request,
+                )
 
         if (
-            !response.isSuccessful
+            !response
+                .isSuccessful
         ) {
             return response
         }
@@ -1973,42 +2707,46 @@ abstract class Lezhin :
                 .body
                 .contentType()
 
-        val bytes = try {
-            response
-                .body
-                .bytes()
-        } catch (e: Throwable) {
-            Log.e(
-                LOG_TAG,
-                "Failed to read shuffled image",
-                e,
-            )
-
-            return response
-        }
-
-        val descrambled = try {
-            LezhinDescrambler
-                .descramble(
-                    input = bytes,
-                    episodeId =
-                    episodeId,
-                    gridSize =
-                    gridSize,
+        val bytes =
+            try {
+                response
+                    .body
+                    .bytes()
+            } catch (e: Throwable) {
+                Log.e(
+                    LOG_TAG,
+                    "Failed to read shuffled image",
+                    e,
                 )
-        } catch (e: Throwable) {
-            Log.e(
-                LOG_TAG,
-                "Failed to descramble image",
-                e,
-            )
 
-            bytes
-        }
+                return response
+            }
+
+        val descrambled =
+            try {
+                LezhinDescrambler
+                    .descramble(
+                        input =
+                        bytes,
+                        episodeId =
+                        episodeId,
+                        gridSize =
+                        gridSize,
+                    )
+            } catch (e: Throwable) {
+                Log.e(
+                    LOG_TAG,
+                    "Failed to descramble image",
+                    e,
+                )
+
+                bytes
+            }
 
         val mediaType =
             if (
-                descrambled === bytes
+                descrambled ===
+                bytes
             ) {
                 originalMediaType
             } else {
@@ -2026,6 +2764,11 @@ abstract class Lezhin :
             )
             .build()
     }
+
+    private data class LatestEntry(
+        val manga: SManga,
+        val updated: Boolean,
+    )
 
     private companion object {
         const val PREF_EMAIL =

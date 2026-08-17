@@ -9,10 +9,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
@@ -54,6 +53,7 @@ class PatreonRelationships(
     @SerialName("card_campaign") val cardCampaign: PatreonRelationship? = null,
     val attachments: PatreonRelationship? = null,
     val images: PatreonRelationship? = null,
+    val media: PatreonRelationship? = null,
     val campaign: PatreonRelationship? = null,
     val items: PatreonRelationship? = null,
 )
@@ -73,6 +73,7 @@ class PatreonAttributes(
     val summary: String? = null,
     val content: String? = null,
     val image: PatreonImage? = null,
+    val mimetype: String? = null,
     @SerialName("content_json_string") val contentJsonString: String? = null,
     @SerialName("current_user_can_view") val currentUserCanView: Boolean? = null,
     @SerialName("published_at") val publishedAt: String? = null,
@@ -112,7 +113,7 @@ class PatreonImageUrls(
 private inline fun <reified T> JsonElement.decodeOrNull(json: Json): T? = runCatching { json.decodeFromJsonElement<T>(this) }.getOrNull()
 
 private inline fun <reified T> JsonElement.asList(json: Json): List<T> = when (this) {
-    is JsonArray -> mapNotNull { it.decodeOrNull<T>(json) }
+    is JsonArray -> mapNotNull { element -> element.decodeOrNull<T>(json) }
     is JsonObject -> listOfNotNull(decodeOrNull<T>(json))
     else -> emptyList()
 }
@@ -137,7 +138,7 @@ private fun relationshipRef(
 ): PatreonResourceRef? = (relationship?.data as? JsonObject)?.decodeOrNull(json)
 
 fun PatreonApiRoot.currentUserMembershipResults(json: Json): List<SManga> {
-    val includedById = included.associateBy { it.id }
+    val includedById = included.associateBy { resource -> resource.id }
     val currentUser = data.asResourceList(json).firstOrNull() ?: return emptyList()
 
     return relationshipRefs(currentUser.relationships.activeMemberships, json).mapNotNull { membershipRef ->
@@ -145,15 +146,15 @@ fun PatreonApiRoot.currentUserMembershipResults(json: Json): List<SManga> {
         val campaignRef = relationshipRef(membership.relationships.campaign, json) ?: return@mapNotNull null
         val campaign = includedById[campaignRef.id] ?: return@mapNotNull null
         val campaignId = campaign.attributes.campaignId.asString()
-            ?: campaign.id.takeIf { it.isNotBlank() }
+            ?: campaign.id.takeIf { id -> id.isNotBlank() }
             ?: return@mapNotNull null
 
         campaign.toSManga(campaignId)
-    }.distinctBy { it.url }
+    }.distinctBy { manga -> manga.url }
 }
 
 fun PatreonApiRoot.exploreCampaignResults(json: Json): List<SManga> {
-    val includedById = included.associateBy { it.id }
+    val includedById = included.associateBy { resource -> resource.id }
     val result = mutableListOf<SManga>()
 
     data.asResourceList(json).forEach { section ->
@@ -161,7 +162,7 @@ fun PatreonApiRoot.exploreCampaignResults(json: Json): List<SManga> {
             val item = includedById[ref.id] ?: return@forEach
             val campaign = item.resolveExploreCampaign(includedById, json) ?: return@forEach
             val campaignId = campaign.attributes.campaignId.asString()
-                ?: campaign.id.takeIf { it.isNotBlank() }
+                ?: campaign.id.takeIf { id -> id.isNotBlank() }
                 ?: return@forEach
 
             result.add(campaign.toSManga(campaignId))
@@ -172,31 +173,31 @@ fun PatreonApiRoot.exploreCampaignResults(json: Json): List<SManga> {
         included.forEach { resource ->
             val campaign = resource.resolveExploreCampaign(includedById, json) ?: return@forEach
             val campaignId = campaign.attributes.campaignId.asString()
-                ?: campaign.id.takeIf { it.isNotBlank() }
+                ?: campaign.id.takeIf { id -> id.isNotBlank() }
                 ?: return@forEach
 
             result.add(campaign.toSManga(campaignId))
         }
     }
 
-    return result.distinctBy { it.url }
+    return result.distinctBy { manga -> manga.url }
 }
 
 fun PatreonApiRoot.searchFeedCampaignResults(json: Json): List<SManga> {
-    val includedById = included.associateBy { it.id }
+    val includedById = included.associateBy { resource -> resource.id }
 
     return data.asResourceList(json).mapNotNull { resource ->
         val campaign = resource.resolveCampaignFromSearchFeed(includedById, json) ?: return@mapNotNull null
         val campaignId = campaign.attributes.campaignId.asString()
-            ?: campaign.id.takeIf { it.isNotBlank() }
+            ?: campaign.id.takeIf { id -> id.isNotBlank() }
             ?: return@mapNotNull null
 
         campaign.toSManga(campaignId)
-    }.distinctBy { it.url }
+    }.distinctBy { manga -> manga.url }
 }
 
 fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
-    val includedById = included.associateBy { it.id }
+    val includedById = included.associateBy { resource -> resource.id }
 
     val elements = when (data) {
         is JsonArray -> data
@@ -214,13 +215,12 @@ fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
             ?.obj("campaign")
             ?.get("data")
             ?.let { relationshipData ->
-                when (relationshipData) {
-                    is JsonObject -> relationshipData.string("id")
-                    else -> null
-                }
+                (relationshipData as? JsonObject)?.string("id")
             }
 
-        val campaignFromIncluded = campaignRefId?.let { includedById[it] }
+        val campaignFromIncluded = campaignRefId?.let { campaignId ->
+            includedById[campaignId]
+        }
 
         val campaignId = when {
             type.contains("campaign", ignoreCase = true) && id.isNotBlank() -> id
@@ -241,7 +241,7 @@ fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
         val patreonUrl = campaignAttrs?.url
             ?: attrs.string("url")
             ?: attrs.string("patreon_url")
-            ?: attrs.string("vanity")?.let { "$baseUrl/$it" }
+            ?: attrs.string("vanity")?.let { vanity -> "$baseUrl/$vanity" }
 
         val username = campaignAttrs?.pageUsername()
             ?: attrs.string("vanity")
@@ -264,7 +264,7 @@ fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
         val description = attrs.string("summary").htmlToMarkdown().orEmpty()
 
         SManga.create().apply {
-            this.url = campaignId?.let { "/campaign/$it" } ?: patreonUrl.toSourcePath(baseUrl)
+            url = campaignId?.let { campaign -> "/campaign/$campaign" } ?: patreonUrl.toSourcePath(baseUrl)
             this.title = title
             author = username
             artist = username
@@ -272,7 +272,7 @@ fun PatreonApiRoot.searchResults(baseUrl: String): List<SManga> {
             this.description = description
             initialized = true
         }
-    }.distinctBy { it.url }
+    }.distinctBy { manga -> manga.url }
 }
 
 fun PatreonResource.toSManga(
@@ -300,7 +300,7 @@ fun PatreonPost.toSChapter(
 ): SChapter = SChapter.create().apply {
     url = "/campaign/$campaignId/post/$id" + if (locked) "?locked=true" else ""
 
-    val rawName = attributes.title?.takeIf { it.isNotBlank() } ?: "Post $id"
+    val rawName = attributes.title?.takeIf { title -> title.isNotBlank() } ?: "Post $id"
     name = if (locked) "🔒 $rawName" else rawName
 
     date_upload = attributes.publishedAt.parsePatreonDate()
@@ -315,18 +315,21 @@ fun PatreonPost.imageUrls(
 ): List<String> {
     if (attributes.currentUserCanView == false) return emptyList()
 
-    val includedById = root.included.associateBy { it.id }
+    val includedById = root.included.associateBy { resource -> resource.id }
     val urls = mutableListOf<String>()
 
     val refs = mutableListOf<PatreonResourceRef>().apply {
         addAll(relationshipRefs(relationships.attachmentsMedia, json))
         addAll(relationshipRefs(relationships.attachments, json))
         addAll(relationshipRefs(relationships.images, json))
-    }.distinctBy { it.id }
+        addAll(relationshipRefs(relationships.media, json))
+    }.distinctBy { ref -> ref.id }
 
     refs.forEach { ref ->
         val media = includedById[ref.id] ?: return@forEach
-        media.attributes.bestImageUrl()?.let { urls.add(it) }
+        media.attributes.bestImageUrl()?.let { imageUrl ->
+            urls.add(imageUrl)
+        }
     }
 
     attributes.postFile?.let { postFile ->
@@ -338,15 +341,20 @@ fun PatreonPost.imageUrls(
     }
 
     attributes.image?.let { image ->
-        listOf(image.largeUrl, image.url).forEach { url ->
-            if (!url.isNullOrBlank() && url.isImageUrl()) {
-                urls.add(url)
+        listOf(image.largeUrl, image.url).forEach { imageUrl ->
+            if (!imageUrl.isNullOrBlank()) {
+                urls.add(imageUrl)
             }
         }
     }
 
-    attributes.content?.extractImageUrlsFromHtml()?.let { urls.addAll(it) }
-    attributes.contentJsonString?.extractImageUrlsFromText()?.let { urls.addAll(it) }
+    attributes.content?.extractImageUrlsFromHtml()?.let { contentUrls ->
+        urls.addAll(contentUrls)
+    }
+
+    attributes.contentJsonString?.extractStructuredImageUrls(json, includedById)?.let { contentUrls ->
+        urls.addAll(contentUrls)
+    }
 
     return urls.distinct()
 }
@@ -366,8 +374,11 @@ private fun PatreonResource.resolveExploreCampaign(
         }
     }
 
-    relationshipRef(relationships.campaign, json)?.id?.let { id ->
-        includedById[id]?.let { return it }
+    val campaignId = relationshipRef(relationships.campaign, json)?.id
+    if (campaignId != null) {
+        includedById[campaignId]?.let { campaign ->
+            return campaign
+        }
     }
 
     return null
@@ -381,23 +392,33 @@ private fun PatreonResource.resolveCampaignFromSearchFeed(
         return this
     }
 
-    relationshipRef(relationships.campaign, json)?.id?.let { id ->
-        includedById[id]?.let { return it }
-    }
-
-    relationshipRef(relationships.cardCampaign, json)?.id?.let { cardId ->
-        val cardCampaign = includedById[cardId] ?: return@let
-
-        relationshipRef(cardCampaign.relationships.campaign, json)?.id?.let { campaignId ->
-            includedById[campaignId]?.let { return it }
-        }
-
-        if (cardCampaign.type?.contains("campaign", ignoreCase = true) == true) {
-            return cardCampaign
+    val directCampaignId = relationshipRef(relationships.campaign, json)?.id
+    if (directCampaignId != null) {
+        includedById[directCampaignId]?.let { campaign ->
+            return campaign
         }
     }
 
-    attributes.campaignId.asString()?.let {
+    val cardId = relationshipRef(relationships.cardCampaign, json)?.id
+    if (cardId != null) {
+        val cardCampaign = includedById[cardId]
+
+        if (cardCampaign != null) {
+            val nestedCampaignId = relationshipRef(cardCampaign.relationships.campaign, json)?.id
+
+            if (nestedCampaignId != null) {
+                includedById[nestedCampaignId]?.let { campaign ->
+                    return campaign
+                }
+            }
+
+            if (cardCampaign.type?.contains("campaign", ignoreCase = true) == true) {
+                return cardCampaign
+            }
+        }
+    }
+
+    if (attributes.campaignId.asString() != null) {
         return this
     }
 
@@ -412,19 +433,22 @@ private fun PatreonAttributes.bestImageUrl(): String? {
         imageUrls?.large,
         imageUrls?.defaultLarge,
         imageUrls?.thumbnail,
+        url,
     )
 
-    val trustFirstCandidate = fileName.isImageFileName()
+    val knownImage = mimetype?.startsWith("image/", ignoreCase = true) == true ||
+        fileName.isImageFileName() ||
+        name.isImageFileName()
 
-    return candidates.firstOrNull { url ->
-        trustFirstCandidate || url.isImageUrl()
+    return candidates.firstOrNull { candidate ->
+        knownImage || candidate.isImageUrl()
     }
 }
 
-private fun PatreonAttributes.pageUsername(): String = vanity?.takeIf { it.isNotBlank() }
+private fun PatreonAttributes.pageUsername(): String = vanity?.takeIf { value -> value.isNotBlank() }
     ?: url.usernameFromPatreonUrl()
     ?: urlForCurrentUser.usernameFromPatreonUrl()
-    ?: name?.takeIf { it.isNotBlank() }
+    ?: name?.takeIf { value -> value.isNotBlank() }
     ?: "Patreon"
 
 internal fun String?.usernameFromPatreonUrl(): String? {
@@ -434,10 +458,10 @@ internal fun String?.usernameFromPatreonUrl(): String? {
         .substringBefore("#")
         .trimEnd('/')
         .substringAfterLast('/')
-        .takeIf {
-            it.isNotBlank() &&
-                it != "www.patreon.com" &&
-                !it.contains("patreon.com")
+        .takeIf { value ->
+            value.isNotBlank() &&
+                value != "www.patreon.com" &&
+                !value.contains("patreon.com")
         }
 }
 
@@ -454,7 +478,7 @@ private fun String?.htmlToMarkdown(): String? {
         .joinToString("\n") { line -> line.trim(' ', '\t') }
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
-        .takeIf { it.isNotBlank() }
+        .takeIf { value -> value.isNotBlank() }
 }
 
 private fun Node.toMarkdown(): String = when (this) {
@@ -503,10 +527,7 @@ private fun Element.toMarkdownElement(): String {
         "ul" -> {
             val items = childNodes()
                 .joinToString("") { node ->
-                    if (
-                        node is Element &&
-                        node.tagName().equals("li", ignoreCase = true)
-                    ) {
+                    if (node is Element && node.tagName().equals("li", ignoreCase = true)) {
                         "- ${node.childrenToMarkdown().trim()}\n"
                     } else {
                         node.toMarkdown()
@@ -519,12 +540,10 @@ private fun Element.toMarkdownElement(): String {
 
         "ol" -> {
             var index = 1
+
             val items = childNodes()
                 .joinToString("") { node ->
-                    if (
-                        node is Element &&
-                        node.tagName().equals("li", ignoreCase = true)
-                    ) {
+                    if (node is Element && node.tagName().equals("li", ignoreCase = true)) {
                         "${index++}. ${node.childrenToMarkdown().trim()}\n"
                     } else {
                         node.toMarkdown()
@@ -593,7 +612,7 @@ private fun String?.isImageFileName(): Boolean {
         .substringBefore('#')
         .lowercase(Locale.ROOT)
 
-    return IMAGE_EXTENSIONS.any { clean.endsWith(it) }
+    return IMAGE_EXTENSIONS.any { extension -> clean.endsWith(extension) }
 }
 
 private fun String.isImageUrl(): Boolean = substringBefore('?')
@@ -608,30 +627,89 @@ private fun String.extractImageUrlsFromHtml(): List<String> = Jsoup.parse(this)
 
         val srcset = element.attr("srcset")
             .split(',')
-            .map { it.trim().substringBefore(' ') }
+            .map { entry -> entry.trim().substringBefore(' ') }
 
         listOf(src) + srcset
     }
-    .filter { it.startsWith("http") && it.isImageUrl() }
+    .filter { url -> url.startsWith("http") }
     .distinct()
+
+private fun String.extractStructuredImageUrls(
+    json: Json,
+    includedById: Map<String, PatreonResource>,
+): List<String> {
+    val element = runCatching {
+        json.parseToJsonElement(this)
+    }.getOrNull() ?: return extractImageUrlsFromText()
+
+    val urls = mutableListOf<String>()
+    element.collectStructuredImageUrls(includedById, urls)
+
+    return urls.distinct()
+}
+
+private fun JsonElement.collectStructuredImageUrls(
+    includedById: Map<String, PatreonResource>,
+    urls: MutableList<String>,
+) {
+    when (this) {
+        is JsonArray -> forEach { element ->
+            element.collectStructuredImageUrls(includedById, urls)
+        }
+
+        is JsonObject -> {
+            val nodeType = string("type").orEmpty()
+            val isImageNode = nodeType.contains("image", ignoreCase = true)
+
+            for ((key, value) in this) {
+                val primitive = (value as? JsonPrimitive)?.contentOrNull
+
+                if (primitive != null) {
+                    val normalized = primitive.replace("\\/", "/")
+
+                    if (key in MEDIA_ID_KEYS || (isImageNode && key == "id")) {
+                        includedById[normalized]?.attributes?.bestImageUrl()?.let { imageUrl ->
+                            urls.add(imageUrl)
+                        }
+                    }
+
+                    if (normalized.startsWith("http")) {
+                        if (
+                            normalized.isImageUrl() ||
+                            key in IMAGE_URL_KEYS ||
+                            (isImageNode && key in IMAGE_NODE_URL_KEYS)
+                        ) {
+                            urls.add(normalized)
+                        }
+                    } else {
+                        urls.addAll(normalized.extractImageUrlsFromText())
+                    }
+                } else {
+                    value.collectStructuredImageUrls(includedById, urls)
+                }
+            }
+        }
+
+        is JsonPrimitive -> {
+            contentOrNull?.let { content ->
+                urls.addAll(content.extractImageUrlsFromText())
+            }
+        }
+    }
+}
 
 private fun String.extractImageUrlsFromText(): List<String> = IMAGE_URL_REGEX
     .findAll(this)
-    .map { it.value.replace("\\/", "/") }
-    .filter { it.isImageUrl() }
+    .map { match -> match.value.replace("\\/", "/") }
+    .filter { url -> url.isImageUrl() }
     .distinct()
     .toList()
 
-private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
 private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 
-private fun JsonElement?.asString(): String? {
-    val primitive = this?.jsonPrimitive ?: return null
-
-    return primitive.contentOrNull
-        ?: primitive.intOrNull?.toString()
-}
+private fun JsonElement?.asString(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 internal fun String?.toSourcePath(baseUrl: String): String {
     val clean = this
@@ -670,6 +748,26 @@ private fun JsonObject.imageUrlsBest(): String? = string("original")
 
 private val IMAGE_EXTENSIONS =
     listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif")
+
+private val MEDIA_ID_KEYS =
+    setOf("media_id", "mediaId", "image_id", "imageId")
+
+private val IMAGE_URL_KEYS =
+    setOf(
+        "src",
+        "image_url",
+        "imageUrl",
+        "large_url",
+        "largeUrl",
+        "original",
+        "default",
+        "large",
+        "thumbnail",
+        "default_large",
+    )
+
+private val IMAGE_NODE_URL_KEYS =
+    setOf("src", "url", "download_url", "downloadUrl")
 
 private val IMAGE_URL_REGEX =
     Regex(

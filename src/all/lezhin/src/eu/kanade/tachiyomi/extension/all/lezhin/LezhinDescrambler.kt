@@ -32,6 +32,7 @@ object LezhinDescrambler {
             )
         } catch (_: Throwable) {
             bitmap.recycle()
+
             return input
         }
 
@@ -43,6 +44,7 @@ object LezhinDescrambler {
             )
         } catch (_: Throwable) {
             bitmap.recycle()
+
             return input
         }
 
@@ -54,6 +56,7 @@ object LezhinDescrambler {
             )
         } catch (_: Throwable) {
             bitmap.recycle()
+
             return input
         }
 
@@ -84,6 +87,7 @@ object LezhinDescrambler {
         } catch (_: Throwable) {
             output.recycle()
             bitmap.recycle()
+
             return input
         }
 
@@ -111,39 +115,23 @@ object LezhinDescrambler {
         episodeId: Int,
         gridSize: Int,
     ): IntArray {
-        val totalTiles =
-            gridSize * gridSize
+        val totalTiles = gridSize * gridSize
+        val indices = IntArray(totalTiles) { it }
 
-        val indices =
-            IntArray(totalTiles) { it }
-
-        var state =
-            episodeId.toLong()
+        var state = episodeId.toLong()
 
         fun next(modulo: Int): Int {
-            state =
-                state xor
-                (state ushr 12)
+            state = state xor (state ushr 12)
+            state = state xor (state shl 25)
+            state = state xor (state ushr 27)
 
-            state =
-                state xor
-                (state shl 25)
-
-            state =
-                state xor
-                (state ushr 27)
-
-            return (
-                (state ushr 32) %
-                    modulo.toLong()
-                ).toInt()
+            return ((state ushr 32) % modulo.toLong()).toInt()
         }
 
         for (i in indices.indices) {
             val j = next(totalTiles)
 
             val value = indices[i]
-
             indices[i] = indices[j]
             indices[j] = value
         }
@@ -156,41 +144,32 @@ object LezhinDescrambler {
         imageHeight: Int,
         permutation: IntArray,
     ): List<PieceData> {
-        val indexedPermutation =
-            permutation
-                .toMutableList()
-                .apply {
-                    add(size)
-                    add(size + 1)
-                }
+        val indexedPermutation = permutation
+            .toMutableList()
+            .apply {
+                add(size)
+                add(size + 1)
+            }
 
         val gridSize = floor(
-            sqrt(
-                indexedPermutation
-                    .size
-                    .toDouble(),
-            ),
+            sqrt(indexedPermutation.size.toDouble()),
         ).toInt()
 
         return indexedPermutation
             .mapIndexedNotNull { fromIndex, toIndex ->
-                val from =
-                    getTileBounds(
-                        imageWidth = imageWidth,
-                        imageHeight = imageHeight,
-                        gridSize = gridSize,
-                        tileIndex = fromIndex,
-                    )
-                        ?: return@mapIndexedNotNull null
+                val from = getTileBounds(
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight,
+                    gridSize = gridSize,
+                    tileIndex = fromIndex,
+                ) ?: return@mapIndexedNotNull null
 
-                val to =
-                    getTileBounds(
-                        imageWidth = imageWidth,
-                        imageHeight = imageHeight,
-                        gridSize = gridSize,
-                        tileIndex = toIndex,
-                    )
-                        ?: return@mapIndexedNotNull null
+                val to = getTileBounds(
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight,
+                    gridSize = gridSize,
+                    tileIndex = toIndex,
+                ) ?: return@mapIndexedNotNull null
 
                 PieceData(
                     from = from,
@@ -205,55 +184,40 @@ object LezhinDescrambler {
         gridSize: Int,
         tileIndex: Int,
     ): Piece? {
-        val totalTiles =
-            gridSize * gridSize
+        val totalTiles = gridSize * gridSize
 
         if (tileIndex < totalTiles) {
-            val tileWidth =
-                imageWidth / gridSize
+            val tileWidth = imageWidth / gridSize
+            val tileHeight = imageHeight / gridSize
 
-            val tileHeight =
-                imageHeight / gridSize
-
-            if (
-                tileWidth <= 0 ||
-                tileHeight <= 0
-            ) {
+            if (tileWidth <= 0 || tileHeight <= 0) {
                 return null
             }
 
             return Piece(
-                left =
-                (tileIndex % gridSize) *
-                    tileWidth,
-                top =
-                (tileIndex / gridSize) *
-                    tileHeight,
+                left = (tileIndex % gridSize) * tileWidth,
+                top = (tileIndex / gridSize) * tileHeight,
                 width = tileWidth,
                 height = tileHeight,
             )
         }
 
         if (tileIndex == totalTiles) {
-            val remainderWidth =
-                imageWidth % gridSize
+            val remainderWidth = imageWidth % gridSize
 
             if (remainderWidth == 0) {
                 return null
             }
 
             return Piece(
-                left =
-                imageWidth -
-                    remainderWidth,
+                left = imageWidth - remainderWidth,
                 top = 0,
                 width = remainderWidth,
                 height = imageHeight,
             )
         }
 
-        val remainderHeight =
-            imageHeight % gridSize
+        val remainderHeight = imageHeight % gridSize
 
         if (remainderHeight == 0) {
             return null
@@ -261,12 +225,8 @@ object LezhinDescrambler {
 
         return Piece(
             left = 0,
-            top =
-            imageHeight -
-                remainderHeight,
-            width =
-            imageWidth -
-                imageWidth % gridSize,
+            top = imageHeight - remainderHeight,
+            width = imageWidth - imageWidth % gridSize,
             height = remainderHeight,
         )
     }
