@@ -29,6 +29,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -71,10 +72,6 @@ abstract class Lezhin :
             else -> "en-US"
         }
 
-    /*
-     * Lezhin's current API implementation uses the
-     * lezhinus.com API host for both EN and KO.
-     */
     private val apiBase =
         "https://www.lezhinus.com/lz-api/v2/"
 
@@ -227,24 +224,14 @@ abstract class Lezhin :
 
         updateSession()
 
-        /*
-         * The current sites expose their scheduled/update
-         * catalogue through different paths:
-         *
-         * EN -> /en/daily
-         * KO -> /ko/scheduled
-         */
         val latestPath = when (lang) {
             "ko" -> "scheduled"
             else -> "daily"
         }
 
-        val url =
-            "$baseUrl/$pathSegment/$latestPath"
-
         val document = client
             .get(
-                url,
+                "$baseUrl/$pathSegment/$latestPath",
                 authorizedHeaders(
                     adult = true,
                 ),
@@ -253,13 +240,10 @@ abstract class Lezhin :
                 it.asJsoup()
             }
 
-        val mangas =
+        return MangasPage(
             parseLatestMangaList(
                 document,
-            )
-
-        return MangasPage(
-            mangas,
+            ),
             false,
         )
     }
@@ -286,17 +270,6 @@ abstract class Lezhin :
                         }
                         ?: return@mapNotNull null
 
-                val title =
-                    extractCardTitle(
-                        anchor = anchor,
-                        alias = alias,
-                    )
-
-                val cover =
-                    extractCardCover(
-                        anchor,
-                    )
-
                 LatestEntry(
                     manga = SManga
                         .create()
@@ -304,11 +277,16 @@ abstract class Lezhin :
                             url =
                                 mangaUrl
 
-                            this.title =
-                                title
+                            title =
+                                extractCardTitle(
+                                    anchor = anchor,
+                                    alias = alias,
+                                )
 
                             thumbnail_url =
-                                cover
+                                extractCardCover(
+                                    anchor,
+                                )
                         },
                     updated =
                     isUpdatedCard(
@@ -320,21 +298,13 @@ abstract class Lezhin :
                 it.manga.url
             }
 
-        /*
-         * Prefer cards currently marked UP/NEW.
-         *
-         * If Lezhin changes/removes those textual markers,
-         * fall back to the complete current schedule rather
-         * than returning an empty Latest list.
-         */
-        val updated =
-            entries
-                .filter {
-                    it.updated
-                }
-                .map {
-                    it.manga
-                }
+        val updated = entries
+            .filter {
+                it.updated
+            }
+            .map {
+                it.manga
+            }
 
         return updated.ifEmpty {
             entries.map {
@@ -350,32 +320,27 @@ abstract class Lezhin :
             return null
         }
 
-        val path = if (
-            value.startsWith(
-                "http://",
-            ) ||
-            value.startsWith(
-                "https://",
-            )
-        ) {
-            value
-                .toHttpUrlOrNull()
-                ?.encodedPath
-                ?: return null
-        } else {
-            value
-                .substringBefore('?')
-                .substringBefore('#')
-                .let {
-                    if (
-                        it.startsWith('/')
-                    ) {
-                        it
-                    } else {
-                        "/$it"
+        val path =
+            if (
+                value.startsWith("http://") ||
+                value.startsWith("https://")
+            ) {
+                value
+                    .toHttpUrlOrNull()
+                    ?.encodedPath
+                    ?: return null
+            } else {
+                value
+                    .substringBefore('?')
+                    .substringBefore('#')
+                    .let {
+                        if (it.startsWith('/')) {
+                            it
+                        } else {
+                            "/$it"
+                        }
                     }
-                }
-        }
+            }
 
         if (
             !path.startsWith(
@@ -392,45 +357,44 @@ abstract class Lezhin :
         anchor: Element,
         alias: String,
     ): String {
-        val candidates =
-            listOfNotNull(
-                anchor
-                    .attr("aria-label")
-                    .takeIf {
-                        it.isNotBlank()
-                    },
-                anchor
-                    .attr("title")
-                    .takeIf {
-                        it.isNotBlank()
-                    },
-                anchor
-                    .selectFirst(
-                        "img[alt]",
-                    )
-                    ?.attr("alt")
-                    ?.takeIf {
-                        it.isNotBlank()
-                    },
-                anchor
-                    .selectFirst(
-                        "[class*=title], [class*=Title]",
-                    )
-                    ?.text()
-                    ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    },
-                anchor
-                    .selectFirst(
-                        "h2, h3, h4",
-                    )
-                    ?.text()
-                    ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    },
-            )
+        val candidates = listOfNotNull(
+            anchor
+                .attr("aria-label")
+                .takeIf {
+                    it.isNotBlank()
+                },
+            anchor
+                .attr("title")
+                .takeIf {
+                    it.isNotBlank()
+                },
+            anchor
+                .selectFirst(
+                    "img[alt]",
+                )
+                ?.attr("alt")
+                ?.takeIf {
+                    it.isNotBlank()
+                },
+            anchor
+                .selectFirst(
+                    "[class*=title], [class*=Title]",
+                )
+                ?.text()
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                },
+            anchor
+                .selectFirst(
+                    "h2, h3, h4",
+                )
+                ?.text()
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                },
+        )
 
         return candidates
             .firstOrNull {
@@ -479,21 +443,18 @@ abstract class Lezhin :
 
     private fun isUpdatedCard(
         anchor: Element,
-    ): Boolean {
-        val badgeTexts =
-            anchor
-                .select(
-                    "span, p, div",
-                )
-                .map {
-                    it.ownText()
-                        .trim()
-                }
-                .filter {
-                    it.isNotBlank()
-                }
-
-        return badgeTexts.any {
+    ): Boolean = anchor
+        .select(
+            "span, p, div",
+        )
+        .map {
+            it.ownText()
+                .trim()
+        }
+        .filter {
+            it.isNotBlank()
+        }
+        .any {
             it.equals(
                 "UP",
                 ignoreCase = true,
@@ -504,7 +465,6 @@ abstract class Lezhin :
                 ) ||
                 it == "신작"
         }
-    }
 
     private fun isBadgeText(
         value: String,
@@ -556,80 +516,81 @@ abstract class Lezhin :
             )
         }
 
-        val url = if (
-            selectedIds.isNotEmpty()
-        ) {
-            "${apiBase}advanced-search/multitags"
-                .toHttpUrl()
-                .newBuilder()
-                .addQueryParameter(
-                    "int_id",
-                    selectedIds
-                        .joinToString(","),
-                )
-                .addQueryParameter(
-                    "ext_id",
-                    "",
-                )
-                .addQueryParameter(
-                    "filter",
-                    "exact_match",
-                )
-                .addQueryParameter(
-                    "order",
-                    "relevant",
-                )
-                .addQueryParameter(
-                    "tab",
-                    "general",
-                )
-                .addQueryParameter(
-                    "limit",
-                    perPage.toString(),
-                )
-                .addQueryParameter(
-                    "offset",
-                    offset.toString(),
-                )
-                .build()
-        } else {
-            "${apiBase}advanced-search"
-                .toHttpUrl()
-                .newBuilder()
-                .addQueryParameter(
-                    "q",
-                    query,
-                )
-                .addQueryParameter(
-                    "t",
-                    "all",
-                )
-                .addQueryParameter(
-                    "order",
-                    "popular",
-                )
-                .addQueryParameter(
-                    "offset",
-                    offset.toString(),
-                )
-                .addQueryParameter(
-                    "limit",
-                    perPage.toString(),
-                )
-                .apply {
-                    if (
-                        selectedNames
-                            .isNotEmpty()
-                    ) {
-                        addQueryParameter(
-                            "tags",
+        val url =
+            if (
+                selectedIds.isNotEmpty()
+            ) {
+                "${apiBase}advanced-search/multitags"
+                    .toHttpUrl()
+                    .newBuilder()
+                    .addQueryParameter(
+                        "int_id",
+                        selectedIds
+                            .joinToString(","),
+                    )
+                    .addQueryParameter(
+                        "ext_id",
+                        "",
+                    )
+                    .addQueryParameter(
+                        "filter",
+                        "exact_match",
+                    )
+                    .addQueryParameter(
+                        "order",
+                        "relevant",
+                    )
+                    .addQueryParameter(
+                        "tab",
+                        "general",
+                    )
+                    .addQueryParameter(
+                        "limit",
+                        perPage.toString(),
+                    )
+                    .addQueryParameter(
+                        "offset",
+                        offset.toString(),
+                    )
+                    .build()
+            } else {
+                "${apiBase}advanced-search"
+                    .toHttpUrl()
+                    .newBuilder()
+                    .addQueryParameter(
+                        "q",
+                        query,
+                    )
+                    .addQueryParameter(
+                        "t",
+                        "all",
+                    )
+                    .addQueryParameter(
+                        "order",
+                        "popular",
+                    )
+                    .addQueryParameter(
+                        "offset",
+                        offset.toString(),
+                    )
+                    .addQueryParameter(
+                        "limit",
+                        perPage.toString(),
+                    )
+                    .apply {
+                        if (
                             selectedNames
-                                .joinToString(","),
-                        )
+                                .isNotEmpty()
+                        ) {
+                            addQueryParameter(
+                                "tags",
+                                selectedNames
+                                    .joinToString(","),
+                            )
+                        }
                     }
-                }
-                .build()
-        }
+                    .build()
+            }
 
         val result = apiGet(
             url = url,
@@ -1223,13 +1184,15 @@ abstract class Lezhin :
             )
 
         val parsed =
-            tall.toHttpUrlOrNull()
+            tall
+                .toHttpUrlOrNull()
                 ?: return tall
 
         if (
             parsed.host !=
             "ccdn.lezhin.com" ||
-            !parsed.encodedPath
+            !parsed
+                .encodedPath
                 .contains(
                     "/images/tall",
                     ignoreCase = true,
@@ -1248,13 +1211,15 @@ abstract class Lezhin :
                 )
 
         val updated =
-            parsed.queryParameter(
-                "updated",
-            )
+            parsed
+                .queryParameter(
+                    "updated",
+                )
                 ?: fallbackUpdated
 
         val webpPath =
-            parsed.encodedPath
+            parsed
+                .encodedPath
                 .replace(
                     Regex(
                         """\.(?:jpg|jpeg|png|webp)$""",
@@ -1317,7 +1282,8 @@ abstract class Lezhin :
                 ?: return source
 
         if (
-            parsed.encodedPath
+            parsed
+                .encodedPath
                 .contains(
                     "/_next/image",
                 )
@@ -1339,15 +1305,18 @@ abstract class Lezhin :
         document: Document,
         manga: SManga,
     ): List<SChapter> {
+        val lockStates =
+            parseChapterLockStates(
+                document,
+            )
+
         val hydrated =
             document
                 .extractNextJs<
                     LezhinHydratedChaptersDto,
                     > { element ->
-                    element is
-                        JsonObject &&
-                        "episodes" in
-                        element
+                    element is JsonObject &&
+                        "episodes" in element
                 }
 
         if (
@@ -1356,25 +1325,44 @@ abstract class Lezhin :
             return hydrated
                 .episodes
                 .map { episode ->
+                    val chapterUrl =
+                        manga.url
+                            .trimEnd('/') +
+                            "/" +
+                            episode.name
+
+                    val isLocked =
+                        normalizeChapterPath(
+                            chapterUrl,
+                        )
+                            ?.let {
+                                lockStates[it]
+                            } ==
+                            true
+
+                    val title =
+                        episode
+                            .display
+                            .title
+
                     SChapter
                         .create()
                         .apply {
                             url =
-                                manga.url
-                                    .trimEnd('/') +
-                                "/" +
-                                episode.name
+                                chapterUrl
 
                             name =
-                                episode
-                                    .display
-                                    .title
+                                if (
+                                    isLocked
+                                ) {
+                                    "🔒 $title"
+                                } else {
+                                    title
+                                }
 
                             (
                                 parseChapterNumber(
-                                    episode
-                                        .display
-                                        .title,
+                                    title,
                                 )
                                     ?: parseChapterNumber(
                                         episode.name,
@@ -1388,15 +1376,18 @@ abstract class Lezhin :
                 }
         }
 
-        /*
-         * HTML fallback in case Lezhin temporarily does
-         * not emit the hydrated episode data.
-         */
         return document
             .select(
-                "div[data-id] a[href]",
+                "div[data-id]",
             )
-            .mapNotNull { anchor ->
+            .mapNotNull { node ->
+                val anchor =
+                    node
+                        .selectFirst(
+                            "a[href]",
+                        )
+                        ?: return@mapNotNull null
+
                 val href =
                     anchor
                         .attr(
@@ -1426,6 +1417,12 @@ abstract class Lezhin :
                             }
                         ?: return@mapNotNull null
 
+                val isLocked =
+                    getChapterLockState(
+                        anchor,
+                    ) ==
+                        true
+
                 SChapter
                     .create()
                     .apply {
@@ -1433,7 +1430,13 @@ abstract class Lezhin :
                             href
 
                         name =
-                            title
+                            if (
+                                isLocked
+                            ) {
+                                "🔒 $title"
+                            } else {
+                                title
+                            }
 
                         (
                             parseChapterNumber(
@@ -1454,6 +1457,154 @@ abstract class Lezhin :
             }
     }
 
+    private fun parseChapterLockStates(
+        document: Document,
+    ): Map<String, Boolean> {
+        return buildMap {
+            document
+                .select(
+                    "div[data-id]",
+                )
+                .forEach { node ->
+                    val anchor =
+                        node
+                            .selectFirst(
+                                "a[href]",
+                            )
+                            ?: return@forEach
+
+                    val path =
+                        normalizeChapterPath(
+                            anchor.attr(
+                                "href",
+                            ),
+                        )
+                            ?: return@forEach
+
+                    val locked =
+                        getChapterLockState(
+                            anchor,
+                        )
+                            ?: return@forEach
+
+                    put(
+                        path,
+                        locked,
+                    )
+                }
+        }
+    }
+
+    private fun getChapterLockState(
+        anchor: Element,
+    ): Boolean? {
+        val priceNodes =
+            anchor.select(
+                "div.flex.items-end.justify-between p",
+            )
+
+        val priceText =
+            when {
+                priceNodes.size >= 2 -> {
+                    priceNodes[1]
+                        .text()
+                        .trim()
+                }
+
+                priceNodes.size == 1 -> {
+                    priceNodes[0]
+                        .text()
+                        .trim()
+                }
+
+                else -> {
+                    anchor
+                        .select(
+                            "p",
+                        )
+                        .lastOrNull()
+                        ?.text()
+                        ?.trim()
+                        .orEmpty()
+                }
+            }
+
+        if (
+            priceText.isBlank()
+        ) {
+            return null
+        }
+
+        val isAccessible =
+            priceText.equals(
+                "purchased",
+                ignoreCase = true,
+            ) ||
+                priceText.equals(
+                    "free",
+                    ignoreCase = true,
+                ) ||
+                priceText.equals(
+                    "owned",
+                    ignoreCase = true,
+                ) ||
+                priceText.equals(
+                    "구매완료",
+                    ignoreCase = true,
+                ) ||
+                priceText.equals(
+                    "구매함",
+                    ignoreCase = true,
+                ) ||
+                priceText.equals(
+                    "무료",
+                    ignoreCase = true,
+                )
+
+        return !isAccessible
+    }
+
+    private fun normalizeChapterPath(
+        value: String,
+    ): String? {
+        if (
+            value.isBlank()
+        ) {
+            return null
+        }
+
+        val path =
+            if (
+                value.startsWith(
+                    "http://",
+                ) ||
+                value.startsWith(
+                    "https://",
+                )
+            ) {
+                value
+                    .toHttpUrlOrNull()
+                    ?.encodedPath
+                    ?: return null
+            } else {
+                value
+                    .substringBefore('?')
+                    .substringBefore('#')
+                    .let {
+                        if (
+                            it.startsWith('/')
+                        ) {
+                            it
+                        } else {
+                            "/$it"
+                        }
+                    }
+            }
+
+        return path
+            .trimEnd('/')
+    }
+
     private fun parseChapterNumber(
         value: String,
     ): Float? = Regex(
@@ -1472,14 +1623,11 @@ abstract class Lezhin :
     ): List<Page> {
         updateSession()
 
-        val chapterUrl =
-            resolveSourceUrl(
-                chapter.url,
-            )
-
         val document = client
             .get(
-                chapterUrl,
+                resolveSourceUrl(
+                    chapter.url,
+                ),
                 authorizedHeaders(
                     adult = true,
                 ),
@@ -1493,10 +1641,8 @@ abstract class Lezhin :
                 .extractNextJs<
                     LezhinQueriesDto,
                     > { element ->
-                    element is
-                        JsonObject &&
-                        "queries" in
-                        element
+                    element is JsonObject &&
+                        "queries" in element
                 }
                 ?: throw IOException(
                     "Chapter is unavailable",
@@ -1506,8 +1652,9 @@ abstract class Lezhin :
             queries
                 .queries
                 .firstOrNull {
-                    it.queryKey
-                        .firstOrNull() ==
+                    getQueryKeyName(
+                        it,
+                    ) ==
                         "viewer-static-state"
                 }
                 ?: throw IOException(
@@ -1518,8 +1665,9 @@ abstract class Lezhin :
             queries
                 .queries
                 .firstOrNull {
-                    it.queryKey
-                        .firstOrNull() ==
+                    getQueryKeyName(
+                        it,
+                    ) ==
                         "viewer-user-state"
                 }
 
@@ -1535,7 +1683,8 @@ abstract class Lezhin :
             userQuery
                 ?.let {
                     runCatching {
-                        it.state
+                        it
+                            .state
                             .data
                             .parseAs<
                                 LezhinViewerStatusDto,
@@ -1655,6 +1804,25 @@ abstract class Lezhin :
                     url = pageUrl,
                 )
             }
+    }
+
+    private fun getQueryKeyName(
+        query: LezhinQueryDto,
+    ): String? {
+        val first =
+            query
+                .queryKey
+                .firstOrNull()
+                ?: return null
+
+        return (
+            first as?
+                JsonPrimitive
+            )
+            ?.takeIf {
+                it.isString
+            }
+            ?.content
     }
 
     override suspend fun getImageUrl(
@@ -1972,10 +2140,8 @@ abstract class Lezhin :
                 .extractNextJs<
                     LezhinAuthDto,
                     > { element ->
-                    element is
-                        JsonObject &&
-                        "accessToken" in
-                        element
+                    element is JsonObject &&
+                        "accessToken" in element
                 }
         } catch (e: Throwable) {
             Log.w(

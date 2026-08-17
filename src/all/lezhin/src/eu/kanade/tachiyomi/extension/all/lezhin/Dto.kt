@@ -111,7 +111,7 @@ class LezhinQueriesDto(
 
 @Serializable
 class LezhinQueryDto(
-    val queryKey: List<String>,
+    val queryKey: List<JsonElement>,
     val state: LezhinQueryStateDto,
 )
 
