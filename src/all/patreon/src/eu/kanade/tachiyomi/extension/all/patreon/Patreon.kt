@@ -86,8 +86,7 @@ abstract class Patreon :
         return MangasPage(emptyList(), false)
     }
 
-    override suspend fun getLatestUpdates(page: Int): MangasPage =
-        getPopularManga(page)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getPopularManga(page)
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -328,7 +327,7 @@ abstract class Patreon :
             setOnBindEditTextListener { editText ->
                 editText.inputType =
                     InputType.TYPE_CLASS_TEXT or
-                        InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                    InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
 
                 editText.isSingleLine = true
             }
@@ -343,7 +342,7 @@ abstract class Patreon :
             setOnBindEditTextListener { editText ->
                 editText.inputType =
                     InputType.TYPE_CLASS_TEXT or
-                        InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    InputType.TYPE_TEXT_VARIATION_PASSWORD
 
                 editText.isSingleLine = true
             }
@@ -560,8 +559,7 @@ abstract class Patreon :
         """.trimIndent()
     }
 
-    private fun loginUrl(): String =
-        "$baseUrl/login?ru=%2Fhome"
+    private fun loginUrl(): String = "$baseUrl/login?ru=%2Fhome"
 
     private fun isAutoLoginCoolingDown(): Boolean {
         val lastFailure = preferences.getLong(
@@ -753,22 +751,20 @@ abstract class Patreon :
         }
     }
 
-    private fun patreonCookie(): String =
-        CookieManager.getInstance()
-            .getCookie(baseUrl)
-            .orEmpty()
+    private fun patreonCookie(): String = CookieManager.getInstance()
+        .getCookie(baseUrl)
+        .orEmpty()
 
-    private fun hasPatreonSession(): Boolean =
-        patreonCookie()
-            .split(';')
-            .any { rawCookie ->
-                val cookie = rawCookie.trim()
-                val separator = cookie.indexOf('=')
+    private fun hasPatreonSession(): Boolean = patreonCookie()
+        .split(';')
+        .any { rawCookie ->
+            val cookie = rawCookie.trim()
+            val separator = cookie.indexOf('=')
 
-                separator > 0 &&
-                    cookie.substring(0, separator).trim() == SESSION_COOKIE &&
-                    cookie.substring(separator + 1).trim().isNotBlank()
-            }
+            separator > 0 &&
+                cookie.substring(0, separator).trim() == SESSION_COOKIE &&
+                cookie.substring(separator + 1).trim().isNotBlank()
+        }
 
     private fun patreonHeaders(
         requireLogin: Boolean = true,
@@ -948,8 +944,7 @@ abstract class Patreon :
         return null
     }
 
-    private fun JsonObject.primitiveString(key: String): String? =
-        (this[key] as? JsonPrimitive)?.contentOrNull
+    private fun JsonObject.primitiveString(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
     private suspend fun fetchCampaignManga(campaignId: String): SManga = try {
         val root = getJson<PatreonApiRoot>(
@@ -1024,63 +1019,56 @@ abstract class Patreon :
         map[page + 1] = cursor
     }
 
-    private fun currentUserMembershipsApiUrl(): String =
-        "$baseUrl/api/current_user" +
-            "?fields%5Bcampaign%5D=avatar_photo_image_urls%2Cname%2Csummary%2Curl%2Curl_for_current_user%2Cvanity" +
-            "&include=active_memberships%2Cactive_memberships.campaign" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    private fun currentUserMembershipsApiUrl(): String = "$baseUrl/api/current_user" +
+        "?fields%5Bcampaign%5D=avatar_photo_image_urls%2Cname%2Csummary%2Curl%2Curl_for_current_user%2Cvanity" +
+        "&include=active_memberships%2Cactive_memberships.campaign" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
-    private fun exploreSectionsApiUrl(): String =
-        "$baseUrl/api/explore/sections" +
-            "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Csummary%2Cavatar_photo_url%2Curl%2Cvanity" +
-            "&include=items%2Citems.campaign" +
-            "&filter%5Banchor_topic%5D=" +
-            "&filter%5Bselected_topic%5D=" +
-            "&filter%5Binclude_nsfw%5D=true" +
-            "&filter%5Bchurned_campaign_id%5D=null" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    private fun exploreSectionsApiUrl(): String = "$baseUrl/api/explore/sections" +
+        "?fields%5Bexplore-campaign%5D=campaign_id%2Cname%2Csummary%2Cavatar_photo_url%2Curl%2Cvanity" +
+        "&include=items%2Citems.campaign" +
+        "&filter%5Banchor_topic%5D=" +
+        "&filter%5Bselected_topic%5D=" +
+        "&filter%5Binclude_nsfw%5D=true" +
+        "&filter%5Bchurned_campaign_id%5D=null" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
     private fun loggedInSearchApiUrl(
         query: String,
         cursor: String,
-    ): String =
-        "$baseUrl/api/search_feed/v1/campaign" +
-            "?filter%5Bquery%5D=${query.encode()}" +
-            "&filter%5Bis_for_preview%5D=false" +
-            "&filter%5Binclude_nsfw%5D=true" +
-            "&fields%5Bcampaign%5D=avatar_photo_url%2Cavatar_photo_image_urls%2Cname%2Csummary%2Curl%2Ccampaign_id%2Cvanity" +
-            "&include=card_campaign.campaign" +
-            "&page%5Bsize%5D=24" +
-            "&page%5Bcursor%5D=${cursor.encode()}" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    ): String = "$baseUrl/api/search_feed/v1/campaign" +
+        "?filter%5Bquery%5D=${query.encode()}" +
+        "&filter%5Bis_for_preview%5D=false" +
+        "&filter%5Binclude_nsfw%5D=true" +
+        "&fields%5Bcampaign%5D=avatar_photo_url%2Cavatar_photo_image_urls%2Cname%2Csummary%2Curl%2Ccampaign_id%2Cvanity" +
+        "&include=card_campaign.campaign" +
+        "&page%5Bsize%5D=24" +
+        "&page%5Bcursor%5D=${cursor.encode()}" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
     private fun anonymousSearchApiUrl(
         query: String,
         page: Int,
-    ): String =
-        "$baseUrl/api/search" +
-            "?q=${query.encode()}" +
-            "&page%5Bnumber%5D=$page" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false" +
-            "&include=[]"
+    ): String = "$baseUrl/api/search" +
+        "?q=${query.encode()}" +
+        "&page%5Bnumber%5D=$page" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false" +
+        "&include=[]"
 
-    private fun postsApiUrl(campaignId: String): String =
-        "$baseUrl/api/posts" +
-            "?$POSTS_QUERY" +
-            "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
+    private fun postsApiUrl(campaignId: String): String = "$baseUrl/api/posts" +
+        "?$POSTS_QUERY" +
+        "&filter%5Bcampaign_id%5D=${campaignId.encode()}"
 
-    private fun postApiUrl(postId: String): String =
-        "$baseUrl/api/posts/${postId.encode()}?$POST_DETAIL_QUERY"
+    private fun postApiUrl(postId: String): String = "$baseUrl/api/posts/${postId.encode()}?$POST_DETAIL_QUERY"
 
-    private fun campaignApiUrl(campaignId: String): String =
-        "$baseUrl/api/campaigns/${campaignId.encode()}" +
-            "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Cname%2Csummary%2Curl%2Cvanity" +
-            "&json-api-version=1.0" +
-            "&json-api-use-default-includes=false"
+    private fun campaignApiUrl(campaignId: String): String = "$baseUrl/api/campaigns/${campaignId.encode()}" +
+        "?fields%5Bcampaign%5D=avatar_photo_url%2Ccover_photo_url%2Cname%2Csummary%2Curl%2Cvanity" +
+        "&json-api-version=1.0" +
+        "&json-api-use-default-includes=false"
 
     private fun String.absolutePatreonUrl(): String = when {
         startsWith("http://") || startsWith("https://") -> this
@@ -1088,36 +1076,28 @@ abstract class Patreon :
         else -> "$baseUrl/$this"
     }
 
-    private fun String.extractCampaignIdFromSourceUrl(): String? =
-        CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
-            .find(this)
-            ?.groupValues
-            ?.getOrNull(1)
+    private fun String.extractCampaignIdFromSourceUrl(): String? = CAMPAIGN_ID_FROM_SOURCE_URL_REGEX
+        .find(this)
+        ?.groupValues
+        ?.getOrNull(1)
 
-    private fun String.encode(): String =
-        URLEncoder.encode(this, Charsets.UTF_8.name())
+    private fun String.encode(): String = URLEncoder.encode(this, Charsets.UTF_8.name())
 
-    private fun String.decodeUrl(): String =
-        URLDecoder.decode(this, Charsets.UTF_8.name())
+    private fun String.decodeUrl(): String = URLDecoder.decode(this, Charsets.UTF_8.name())
 
-    private fun String.searchCursorKey(): String =
-        trim().lowercase()
+    private fun String.searchCursorKey(): String = trim().lowercase()
 
-    private fun hideLockedChapters(): Boolean =
-        preferences.getBoolean(HIDE_LOCKED_CHAPTERS_PREF, false)
+    private fun hideLockedChapters(): Boolean = preferences.getBoolean(HIDE_LOCKED_CHAPTERS_PREF, false)
 
-    private fun String.extractPostIdFromChapterUrl(): String =
-        substringAfterLast("/post/")
-            .substringBefore('/')
-            .substringBefore('?')
+    private fun String.extractPostIdFromChapterUrl(): String = substringAfterLast("/post/")
+        .substringBefore('/')
+        .substringBefore('?')
 
-    private fun FilterList.membershipsOnly(): Boolean =
-        filterIsInstance<MembershipsOnlyFilter>()
-            .firstOrNull()
-            ?.state == true
+    private fun FilterList.membershipsOnly(): Boolean = filterIsInstance<MembershipsOnlyFilter>()
+        .firstOrNull()
+        ?.state == true
 
-    private class MembershipsOnlyFilter :
-        Filter.CheckBox("Only memberships", false)
+    private class MembershipsOnlyFilter : Filter.CheckBox("Only memberships", false)
 
     private class LruCache<K, V>(
         private val maxEntries: Int,
