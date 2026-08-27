@@ -222,7 +222,8 @@ abstract class Mangago :
     private fun parseChapterList(document: Document): List<SChapter> = document.select(":is(table#raws_table, table#chapter_table) > tbody > tr, table.uk-table > tbody > tr")
         .mapNotNull { element ->
             val link = element.selectFirst("a.chico") ?: return@mapNotNull null
-            if (link.attr("href").contains("/raw/") && removeRaws) return@mapNotNull null
+            val isRaw = link.attr("href").contains("/raw/")
+            if (isRaw && removeRaws) return@mapNotNull null
             val name = link.text().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             val date = DATE_FORMAT.tryParseDate(element.select("td:last-child").text(), ZoneOffset.UTC)
             val scanlator = element.selectFirst("td.no a, td.uk-table-shrink a")
@@ -232,7 +233,7 @@ abstract class Mangago :
 
             SChapter.create().apply {
                 url = stableChapterId(date, name, scanlator)
-                this.name = name
+                this.name = if (isRaw) "🉐 $name" else name
                 date_upload = date
                 this.scanlator = scanlator ?: "Unknown"
                 memo = buildJsonObject { put("chapterUrl", chapterUrl) }
