@@ -6,8 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.util.Base64
 import android.util.LruCache
-import android.widget.Toast
-import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import app.cash.quickjs.QuickJs
@@ -24,6 +22,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.addCookie
 import keiyoushi.network.get
+import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.decodeHex
 import keiyoushi.utils.getPreferences
@@ -36,7 +35,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -67,12 +65,7 @@ abstract class Mangago :
     override fun OkHttpClient.Builder.configureClient() = apply {
         addInterceptor(::imageDescrambler)
         addCookie("_m_superu" to "1")
-    }
-
-    override fun Headers.Builder.configureHeaders() = apply {
-        preferences.getString(PREF_KEY_CUSTOM_UA, null)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { set("User-Agent", it) }
+        rateLimit(1) { it.host == baseUrl.toHttpUrl().host }
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
@@ -166,16 +159,8 @@ abstract class Mangago :
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
-        val removedTitleInfo = mutableListOf<String>()
-
-        document.selectFirst(".w-title h1")?.text()?.let { originalTitle ->
-            title = originalTitle
-            if (isRemoveTitleVersion()) {
-                title = title.removeTitleInfo(TITLE_REGEX, removedTitleInfo)
-            }
-            customTitleRegex()?.let { regex ->
-                title = title.removeTitleInfo(regex, removedTitleInfo)
-            }
+        document.selectFirst(".w-title h1")?.text()?.let {
+            title = if (removeTitleVersion) it.replace(TITLE_REGEX, "") else it
         }
 
         document.getElementById("information")?.let { info ->
@@ -201,7 +186,7 @@ abstract class Mangago :
                                 if (isNotEmpty()) append("\n\n")
                                 append(ALT_NAME_PREFIX)
                                 append("\n")
-                                altNames.joinTo(this, "\n") { "- `$it`" }
+                                altNames.joinTo(this, "\n") { "- $it" }
                             }
                         }
                     }
@@ -215,39 +200,22 @@ abstract class Mangago :
                 }
             }
         }
-
-        removedTitleInfo.removeAll { it.trim().equals("(Yaoi)", ignoreCase = true) }
-        if (removedTitleInfo.isNotEmpty()) {
-            description = buildString {
-                append(description.orEmpty())
-                if (isNotEmpty()) append("\n\n")
-                append("----\n#### **Removed from title**\n")
-                removedTitleInfo.joinTo(this, "\n", postfix = "\n") { "- `$it`" }
-            }.trim().ifEmpty { null }
-        }
     }
 
-    private fun chapterListSelector() = if (preferences.getBoolean(SHOW_RAW_CHAPTERS_PREF, false)) {
-        "table#chapter_table > tbody > tr, table.uk-table > tbody > tr, table#raws_table > tbody > tr"
-    } else {
-        "table#chapter_table > tbody > tr:not(:has(a[href*='/raw/'])), table.uk-table > tbody > tr:not(:has(a[href*='/raw/']))"
-    }
-
-    private fun parseChapterList(document: Document): List<SChapter> = document.select(chapterListSelector())
+    private fun parseChapterList(document: Document): List<SChapter> = document.select(":is(table#raws_table, table#chapter_table) > tbody > tr, table.uk-table > tbody > tr")
         .mapNotNull { element ->
             val link = element.selectFirst("a.chico") ?: return@mapNotNull null
+            if (link.attr("href").contains("/raw/") && removeRaws) return@mapNotNull null
             val name = link.text().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             val date = DATE_FORMAT.tryParseDate(element.select("td:last-child").text(), ZoneOffset.UTC)
             val scanlator = element.selectFirst("td.no a, td.uk-table-shrink a")
                 ?.text()
                 ?.takeIf { it.isNotEmpty() }
             val chapterUrl = link.absUrl("href")
-            val isRaw = "/raw/" in chapterUrl
-            val stableName = if (isRaw) "raw:$name" else name
 
             SChapter.create().apply {
-                url = stableChapterId(date, stableName, scanlator)
-                this.name = if (isRaw) "🉐 $name" else name
+                url = stableChapterId(date, name, scanlator)
+                this.name = name
                 date_upload = date
                 this.scanlator = scanlator ?: "Unknown"
                 memo = buildJsonObject { put("chapterUrl", chapterUrl) }
@@ -542,18 +510,16 @@ abstract class Mangago :
         .joinToString("") { "%02x".format(it) }
         .takeLast(10)
 
-    private fun String.removeTitleInfo(regex: Regex, removed: MutableList<String>) = replace(regex) {
-        removed += it.value
-        ""
-    }.trim()
-
-    private fun isRemoveTitleVersion() = preferences.getBoolean(REMOVE_TITLE_VERSION_PREF, false)
-
-    private fun customTitleRegex() = preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", null)
-        ?.takeIf { it.isNotBlank() }
-        ?.let { Regex(it, RegexOption.IGNORE_CASE) }
+    private val removeRaws get() = preferences.getBoolean(REMOVE_RAW_PREF, true)
+    private val removeTitleVersion get() = preferences.getBoolean(REMOVE_TITLE_VERSION_PREF, false)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        SwitchPreferenceCompat(screen.context).apply {
+            key = REMOVE_RAW_PREF
+            title = "Hide RAW chapters"
+            setDefaultValue(true)
+        }.let(screen::addPreference)
+
         SwitchPreferenceCompat(screen.context).apply {
             key = REMOVE_TITLE_VERSION_PREF
             title = "Remove version information from entry titles"
@@ -562,47 +528,12 @@ abstract class Mangago :
                 "To update existing entries, enable 'update library manga title' in advanced settings of app"
             setDefaultValue(false)
         }.let(screen::addPreference)
-
-        EditTextPreference(screen.context).apply {
-            key = "${REMOVE_TITLE_CUSTOM_PREF}_$lang"
-            title = "Remove custom information from title"
-            summary = preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", "") ?: ""
-            setDefaultValue("")
-        }.let(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = SHOW_RAW_CHAPTERS_PREF
-            title = "Show raw chapters"
-            summary = "Include raw (untranslated) chapters in the chapter list."
-            setDefaultValue(false)
-        }.let(screen::addPreference)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_KEY_CUSTOM_UA
-            title = "Custom user agent string"
-            summary = "Leave blank to use the default user agent string"
-            setOnPreferenceChangeListener { _, newValue ->
-                try {
-                    Headers.headersOf("User-Agent", newValue as String)
-                    true
-                } catch (error: IllegalArgumentException) {
-                    Toast.makeText(
-                        screen.context,
-                        "Invalid user agent string: ${error.message}",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    false
-                }
-            }
-        }.also(screen::addPreference)
     }
 }
 
+private const val REMOVE_RAW_PREF = "pref_remove_raw"
 private const val REMOVE_TITLE_VERSION_PREF = "REMOVE_TITLE_VERSION"
-private const val REMOVE_TITLE_CUSTOM_PREF = "TITLE_REGEX_PATTERN"
-private const val SHOW_RAW_CHAPTERS_PREF = "SHOW_RAW_CHAPTERS"
-private const val PREF_KEY_CUSTOM_UA = "pref_key_custom_ua_"
-private const val ALT_NAME_PREFIX = "----\n#### **Alternative names**"
+private const val ALT_NAME_PREFIX = "Alternative Names:"
 
 private val DATE_FORMAT = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH)
 private val KEY_LOCATION_REGEX = Regex("""str\.charAt\(\s*(\d+)\s*\)""")
@@ -621,7 +552,7 @@ private val JS_FILTERS = listOf(
     "height",
 )
 private val TITLE_REGEX = Regex(
-    """^(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|【[^】]*】|‹[^›]*›|-[^-]*-)\s*)+|(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|【[^】]*】|‹[^›]*›|-[^-]*-|/\s*Official|\|.*|/.*|~.*)\s*)+$""",
+    """^(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩)\s*)+|(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|/\s*Official)\s*)+$""",
     RegexOption.IGNORE_CASE,
 )
 private val REPLACE_POS_BYTECODE by lazy {
