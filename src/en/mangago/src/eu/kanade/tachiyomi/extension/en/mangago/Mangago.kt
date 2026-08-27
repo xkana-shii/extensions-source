@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.util.Base64
 import android.util.LruCache
+import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import app.cash.quickjs.QuickJs
@@ -22,7 +23,6 @@ import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.addCookie
 import keiyoushi.network.get
-import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.decodeHex
 import keiyoushi.utils.getPreferences
@@ -65,7 +65,6 @@ abstract class Mangago :
     override fun OkHttpClient.Builder.configureClient() = apply {
         addInterceptor(::imageDescrambler)
         addCookie("_m_superu" to "1")
-        rateLimit(1) { it.host == baseUrl.toHttpUrl().host }
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
@@ -159,8 +158,16 @@ abstract class Mangago :
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
-        document.selectFirst(".w-title h1")?.text()?.let {
-            title = if (removeTitleVersion) it.replace(TITLE_REGEX, "") else it
+        val removedTitleInfo = mutableListOf<String>()
+
+        document.selectFirst(".w-title h1")?.text()?.let { originalTitle ->
+            title = originalTitle
+            if (removeTitleVersion) {
+                title = title.removeTitleInfo(TITLE_REGEX, removedTitleInfo)
+            }
+            customTitleRegex()?.let { regex ->
+                title = title.removeTitleInfo(regex, removedTitleInfo)
+            }
         }
 
         document.getElementById("information")?.let { info ->
@@ -186,7 +193,7 @@ abstract class Mangago :
                                 if (isNotEmpty()) append("\n\n")
                                 append(ALT_NAME_PREFIX)
                                 append("\n")
-                                altNames.joinTo(this, "\n") { "- $it" }
+                                altNames.joinTo(this, "\n") { "- `$it`" }
                             }
                         }
                     }
@@ -199,6 +206,16 @@ abstract class Mangago :
                     "genre(s):" -> genre = element.select("a").joinToString { it.text() }
                 }
             }
+        }
+
+        removedTitleInfo.removeAll { it.trim().equals("(Yaoi)", ignoreCase = true) }
+        if (removedTitleInfo.isNotEmpty()) {
+            description = buildString {
+                append(description.orEmpty())
+                if (isNotEmpty()) append("\n\n")
+                append("----\n#### **Removed from title**\n")
+                removedTitleInfo.joinTo(this, "\n", postfix = "\n") { "- `$it`" }
+            }.trim().ifEmpty { null }
         }
     }
 
@@ -510,6 +527,15 @@ abstract class Mangago :
         .joinToString("") { "%02x".format(it) }
         .takeLast(10)
 
+    private fun String.removeTitleInfo(regex: Regex, removed: MutableList<String>) = replace(regex) {
+        removed += it.value
+        ""
+    }.trim()
+
+    private fun customTitleRegex() = preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", null)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { Regex(it, RegexOption.IGNORE_CASE) }
+
     private val removeRaws get() = preferences.getBoolean(REMOVE_RAW_PREF, true)
     private val removeTitleVersion get() = preferences.getBoolean(REMOVE_TITLE_VERSION_PREF, false)
 
@@ -528,12 +554,20 @@ abstract class Mangago :
                 "To update existing entries, enable 'update library manga title' in advanced settings of app"
             setDefaultValue(false)
         }.let(screen::addPreference)
+
+        EditTextPreference(screen.context).apply {
+            key = "${REMOVE_TITLE_CUSTOM_PREF}_$lang"
+            title = "Remove custom information from title"
+            summary = preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", "") ?: ""
+            setDefaultValue("")
+        }.let(screen::addPreference)
     }
 }
 
 private const val REMOVE_RAW_PREF = "pref_remove_raw"
 private const val REMOVE_TITLE_VERSION_PREF = "REMOVE_TITLE_VERSION"
-private const val ALT_NAME_PREFIX = "Alternative Names:"
+private const val REMOVE_TITLE_CUSTOM_PREF = "TITLE_REGEX_PATTERN"
+private const val ALT_NAME_PREFIX = "----\n#### **Alternative names**"
 
 private val DATE_FORMAT = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH)
 private val KEY_LOCATION_REGEX = Regex("""str\.charAt\(\s*(\d+)\s*\)""")
@@ -552,7 +586,7 @@ private val JS_FILTERS = listOf(
     "height",
 )
 private val TITLE_REGEX = Regex(
-    """^(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩)\s*)+|(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|/\s*Official)\s*)+$""",
+    """^(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|【[^】]*】|‹[^›]*›|-[^-]*-)\s*)+|(?:\s*(?:\([^()]*\)|\{[^{}]*\}|\[(?:(?!]).)*]|«[^»]*»|〘[^〙]*〙|「[^」]*」|『[^』]*』|≪[^≫]*≫|﹛[^﹜]*﹜|〖[^〖〗]*〗|𖤍.+?𖤍|《[^》]*》|⌜.+?⌝|⟨[^⟩]*⟩|【[^】]*】|‹[^›]*›|-[^-]*-|/\s*Official|\|.*|/.*|~.*)\s*)+$""",
     RegexOption.IGNORE_CASE,
 )
 private val REPLACE_POS_BYTECODE by lazy {
