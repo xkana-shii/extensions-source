@@ -1310,12 +1310,15 @@ abstract class Lezhin :
                 document,
             )
 
+        // KNS
         val hydrated =
             runCatching {
-                document.extractNextJs<LezhinHydratedChaptersDto> { element: JsonObject ->
-                    element.containsKey("episodes")
+                document.extractNextJs<LezhinHydratedChaptersDto> { element: JsonElement ->
+                    element is JsonObject &&
+                        element.containsKey("episodes")
                 }
             }.getOrNull()
+        // KNS
 
         if (
             hydrated != null
@@ -1638,7 +1641,7 @@ abstract class Lezhin :
             document
                 .extractNextJs<
                     LezhinQueriesDto,
-                    > { element ->
+                    > { element: JsonElement ->
                     element is JsonObject &&
                         "queries" in element
                 }
@@ -2137,7 +2140,7 @@ abstract class Lezhin :
             document
                 .extractNextJs<
                     LezhinAuthDto,
-                    > { element ->
+                    > { element: JsonElement ->
                     element is JsonObject &&
                         "accessToken" in element
                 }
