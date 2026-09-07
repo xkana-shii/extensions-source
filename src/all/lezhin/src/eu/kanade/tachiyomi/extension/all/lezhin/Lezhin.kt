@@ -13,7 +13,6 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
 import keiyoushi.network.post
@@ -237,7 +236,10 @@ abstract class Lezhin :
                 ),
             )
             .use {
-                it.asJsoup()
+                Jsoup.parse(
+                    it.body.string(),
+                    it.request.url.toString(),
+                )
             }
 
         return MangasPage(
@@ -749,7 +751,10 @@ abstract class Lezhin :
                 ),
             )
             .use {
-                it.asJsoup()
+                Jsoup.parse(
+                    it.body.string(),
+                    it.request.url.toString(),
+                )
             }
 
         return parseMangaDetails(
@@ -788,7 +793,10 @@ abstract class Lezhin :
                 ),
             )
             .use {
-                it.asJsoup()
+                Jsoup.parse(
+                    it.body.string(),
+                    it.request.url.toString(),
+                )
             }
 
         return SMangaUpdate(
@@ -1636,7 +1644,10 @@ abstract class Lezhin :
                 ),
             )
             .use {
-                it.asJsoup()
+                Jsoup.parse(
+                    it.body.string(),
+                    it.request.url.toString(),
+                )
             }
 
         // KNS
@@ -2137,8 +2148,10 @@ abstract class Lezhin :
                             return null
                         }
 
-                        response
-                            .asJsoup()
+                        Jsoup.parse(
+                            response.body.string(),
+                            response.request.url.toString(),
+                        )
                     }
 
             // KNS
