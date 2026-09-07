@@ -1313,10 +1313,12 @@ abstract class Lezhin :
         // KNS
         val hydrated =
             runCatching {
-                document.extractNextJs<LezhinHydratedChaptersDto> { element: JsonElement ->
-                    element is JsonObject &&
-                        element.containsKey("episodes")
-                }
+                document.extractNextJs<LezhinHydratedChaptersDto>(
+                    predicate = { element: JsonElement ->
+                        element is JsonObject &&
+                            element.containsKey("episodes")
+                    },
+                )
             }.getOrNull()
         // KNS
 
@@ -1637,17 +1639,19 @@ abstract class Lezhin :
                 it.asJsoup()
             }
 
+        // KNS
         val queries =
             document
-                .extractNextJs<
-                    LezhinQueriesDto,
-                    > { element: JsonElement ->
-                    element is JsonObject &&
-                        "queries" in element
-                }
+                .extractNextJs<LezhinQueriesDto>(
+                    predicate = { element: JsonElement ->
+                        element is JsonObject &&
+                            "queries" in element
+                    },
+                )
                 ?: throw IOException(
                     "Chapter is unavailable",
                 )
+        // KNS
 
         val pagesQuery =
             queries
@@ -2137,13 +2141,15 @@ abstract class Lezhin :
                             .asJsoup()
                     }
 
+            // KNS
             document
-                .extractNextJs<
-                    LezhinAuthDto,
-                    > { element: JsonElement ->
-                    element is JsonObject &&
-                        "accessToken" in element
-                }
+                .extractNextJs<LezhinAuthDto>(
+                    predicate = { element: JsonElement ->
+                        element is JsonObject &&
+                            "accessToken" in element
+                    },
+                )
+            // KNS
         } catch (e: Throwable) {
             Log.w(
                 LOG_TAG,
