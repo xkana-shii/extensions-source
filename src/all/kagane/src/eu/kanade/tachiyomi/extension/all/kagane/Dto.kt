@@ -343,7 +343,7 @@ class ChapterDto(
         val SMART_KEYWORDS = listOf(
             "hiatus", "special episode", "season", "special", "finale",
             "bonus", "romantasy au", "historical au", "side story",
-            "creator's note", "scheduled break",
+            "creator's note", "scheduled break", "epilogue", "prologue",
         )
 
         val SMART_SEASON_REGEX = Regex(
