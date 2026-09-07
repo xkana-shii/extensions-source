@@ -1311,13 +1311,11 @@ abstract class Lezhin :
             )
 
         val hydrated =
-            document
-                .extractNextJs<
-                    LezhinHydratedChaptersDto,
-                    > { element ->
-                    element is JsonObject &&
-                        "episodes" in element
+            runCatching {
+                document.extractNextJs<LezhinHydratedChaptersDto> { element: JsonObject ->
+                    element.containsKey("episodes")
                 }
+            }.getOrNull()
 
         if (
             hydrated != null
