@@ -1,3 +1,4 @@
+
 package eu.kanade.tachiyomi.extension.all.cubari
 
 import eu.kanade.tachiyomi.source.model.SManga
@@ -52,6 +53,33 @@ fun JsonElement.pageSrc(): String = if (this is JsonObject) {
     string
 }
 
+// KNS
+@Serializable
+class GithubRepositoryDto(
+    @SerialName("default_branch") val defaultBranch: String,
+)
+
+@Serializable
+class GithubTreeDto(
+    val tree: List<GithubTreeEntryDto>,
+)
+
+@Serializable
+class GithubTreeEntryDto(
+    val path: String,
+    val type: String,
+)
+
+@Serializable
+class GithubMangaDto(
+    val title: String,
+    val description: String,
+    val artist: String,
+    val author: String,
+    val cover: String? = null,
+)
+// KNS
+
 private fun createManga(
     title: String,
     artist: String?,
@@ -63,7 +91,10 @@ private fun createManga(
     this.title = title
     this.artist = artist ?: Cubari.ARTIST_FALLBACK
     this.author = author ?: Cubari.AUTHOR_FALLBACK
-    this.description = description?.substringBefore("Tags: ") ?: Cubari.DESCRIPTION_FALLBACK
+
+    // KNS
+    this.description = description?.substringBefore("Status: ")?.trim() ?: Cubari.DESCRIPTION_FALLBACK
+
     genre = description?.let {
         if (it.contains("Tags: ")) {
             it.substringAfter("Tags: ")
@@ -71,6 +102,18 @@ private fun createManga(
             ""
         }
     } ?: ""
+
+    status = when {
+        description?.contains("Status: Completed", ignoreCase = true) == true -> SManga.COMPLETED
+        description?.contains("Status: Ongoing", ignoreCase = true) == true -> SManga.ONGOING
+        description?.contains("Status: Licensed", ignoreCase = true) == true -> SManga.LICENSED
+        description?.contains("Status: Publishing Finished", ignoreCase = true) == true -> SManga.PUBLISHING_FINISHED
+        description?.contains("Status: Cancelled", ignoreCase = true) == true -> SManga.CANCELLED
+        description?.contains("Status: On Hiatus", ignoreCase = true) == true -> SManga.ON_HIATUS
+        else -> SManga.UNKNOWN
+    }
+    // KNS
+
     this.url = url
     thumbnail_url = cover ?: ""
 }
