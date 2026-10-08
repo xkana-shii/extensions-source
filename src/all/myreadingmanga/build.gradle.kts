@@ -6,9 +6,9 @@ plugins {
 
 keiyoushi {
     name = "MyReadingManga"
-    versionCode = 62
+    versionCode = 0
     contentWarning = ContentWarning.NSFW
-    libVersion = "1.4"
+    libVersion = "1.6"
 
     listOf("ar", "id", "zh", "zh-hant", "hr", "en", "fil", "fr", "de", "hu", "it", "ja", "ko", "lt", "fa", "pl", "pt", "pt-BR", "ru", "sk", "es", "sv", "th", "tr", "vi").forEach {
         source {

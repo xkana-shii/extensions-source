@@ -1,12 +1,15 @@
+
 package eu.kanade.tachiyomi.multisrc.kemono
 
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import keiyoushi.utils.tryParse
+import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.double
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Serializable
@@ -27,7 +30,7 @@ class KemonoCreatorDto(
 ) {
     var fav: Long = 0
     val updatedDate get() = when {
-        updated.isString -> dateFormat.tryParse(updated.content)
+        updated.isString -> DateTimeFormatter.ISO_LOCAL_DATE_TIME.tryParseDateTime(updated.content)
         else -> (updated.double * 1000).toLong()
     }
 
@@ -41,8 +44,6 @@ class KemonoCreatorDto(
     }
 
     companion object {
-        private val dateFormat by lazy { getApiDateFormat() }
-
         fun String.serviceName() = when (this) {
             "fanbox" -> "Pixiv Fanbox"
             "subscribestar" -> "SubscribeStar"
@@ -81,25 +82,20 @@ class KemonoPostDto(
             }
         }.distinctBy { it.path }.map { it.toString() }
 
-    fun toSChapter() = SChapter.create().apply {
-        val postDate = dateFormat.tryParse(edited ?: published ?: added)
+    fun toSChapter(zone: ZoneId) = SChapter.create().apply {
+        val postDate = DateTimeFormatter.ISO_LOCAL_DATE_TIME.tryParseDateTime(edited ?: published ?: added, zone)
 
         url = "/$service/user/$user/post/$id"
         date_upload = postDate
         name = title.ifBlank {
             val postDateString = when {
-                postDate != 0L -> chapterNameDateFormat.format(postDate)
+                postDate != 0L -> chapterNameDateFormat.format(Instant.ofEpochMilli(postDate).atZone(ZoneId.systemDefault()))
                 else -> "unknown date"
             }
 
             "Post from $postDateString"
         }
         chapter_number = -2f
-    }
-
-    companion object {
-        val dateFormat by lazy { getApiDateFormat() }
-        val chapterNameDateFormat by lazy { getChapterNameDateFormat() }
     }
 }
 
@@ -120,6 +116,4 @@ class KemonoLoginRequestDto(
 )
 // KNS
 
-private fun getApiDateFormat() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.ENGLISH)
-
-private fun getChapterNameDateFormat() = SimpleDateFormat("yyyy-MM-dd 'at' HH:mm:ss", Locale.ENGLISH)
+private val chapterNameDateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd 'at' HH:mm:ss", Locale.ENGLISH)

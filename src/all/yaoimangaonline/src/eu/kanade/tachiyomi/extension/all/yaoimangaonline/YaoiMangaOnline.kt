@@ -1,24 +1,29 @@
+
 package eu.kanade.tachiyomi.extension.all.yaoimangaonline
 
 import android.text.Html
-import android.util.Log
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.toJsonElement
+import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
-import okhttp3.Response
+import org.jsoup.nodes.Document
 
 @Source
-abstract class YaoiMangaOnline : HttpSource() {
+abstract class YaoiMangaOnline : KeiSource() {
 
     override val supportsLatest = false
+
+    override val supportsFilterFetching = true
 
     private val excludedCategoryIds = setOf(
         "2009", // Yaoi Anime
@@ -40,27 +45,16 @@ abstract class YaoiMangaOnline : HttpSource() {
         "Ongoing",
     )
 
-    private var typeData: Array<Pair<String, String>> = arrayOf("ALL" to "")
-    private var doujinshiData: Array<Pair<String, String>> = arrayOf("ALL" to "")
-    private var tagData: Array<Pair<String, String>> = arrayOf("ALL" to "")
-    private var filtersInitialized = false
-
     private fun cleanCategoryName(raw: String): String = raw
         .replace(Regex("\\s*\\(\\d[\\d,]*\\)$"), "")
         .replace("&amp;", "&")
         .trim()
 
-    private fun fetchFilters() {
-        if (filtersInitialized) return
+    override suspend fun fetchFilterData(): JsonElement {
+        val document = client.get(baseUrl).asJsoup()
 
-        try {
-            val response = client.newCall(GET(baseUrl, headers)).execute()
-            val doc = response.asJsoup()
-
-            val categoryOptions = doc.select("#cat option[value]")
-            Log.d("YaoiMangaOnline", "Found ${categoryOptions.size} category options")
-
-            val allCategories = categoryOptions.mapNotNull { option ->
+        val allCategories = document.select("#cat option[value]")
+            .mapNotNull { option ->
                 val value = option.attr("value").trim()
                 val rawName = option.text().trim()
                 val cleanName = cleanCategoryName(rawName)
@@ -74,53 +68,37 @@ abstract class YaoiMangaOnline : HttpSource() {
                 ) {
                     null
                 } else {
-                    cleanName to value
+                    YaoiFilterOption(cleanName, value)
                 }
             }
 
-            val djRegex = Regex("(?i)\\bdj\\b|\\bdoujinshi\\b")
+        val djRegex = Regex("(?i)\\bdj\\b|\\bdoujinshi\\b")
 
-            typeData = (
-                listOf("ALL" to "") + allCategories
-                    .filter { !djRegex.containsMatchIn(it.first) }
-                    .map { it.first.trim() to it.second.trim() }
-                )
-                .toTypedArray()
+        val types = allCategories.filterNot { djRegex.containsMatchIn(it.name) }
+        val doujinshi = allCategories.filter { djRegex.containsMatchIn(it.name) }
 
-            doujinshiData = (
-                listOf("ALL" to "") + allCategories
-                    .filter { djRegex.containsMatchIn(it.first) }
-                    .map { it.first.trim() to it.second.trim() }
-                )
-                .toTypedArray()
+        val tags = document.select(".tagcloud a.tag-cloud-link")
+            .mapNotNull { element ->
+                val name = element.text().trim()
+                val href = element.attr("href").trim()
+                val slug = href.trimEnd('/').substringAfterLast("/tag/").trimEnd('/').trim()
 
-            val tags = doc.select(".tagcloud a.tag-cloud-link")
-                .mapNotNull { a ->
-                    val name = a.text().trim()
-                    val href = a.attr("href").trim()
-                    val slug = href.trimEnd('/').substringAfterLast("/tag/").trimEnd('/').trim()
-                    if (name.isEmpty() || slug.isEmpty()) null else name to slug
+                if (name.isEmpty() || slug.isEmpty()) {
+                    null
+                } else {
+                    YaoiFilterOption(name, slug)
                 }
+            }
 
-            tagData = (listOf("ALL" to "") + tags).toTypedArray()
-
-            filtersInitialized = true
-            Log.d(
-                "YaoiMangaOnline",
-                "Filters initialized: ${typeData.size} types, ${doujinshiData.size} doujinshi, ${tagData.size} tags",
-            )
-        } catch (e: Exception) {
-            Log.e("YaoiMangaOnline", "Failed to fetch filters", e)
-        }
+        return YaoiFilterData(types, doujinshi, tags).toJsonElement()
     }
 
     // =================== Popular ===================
 
-    override fun popularMangaRequest(page: Int) = GET("$baseUrl/page/$page/", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage = parseMangasPage(client.get("$baseUrl/page/$page/").asJsoup())
 
-    override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
-        val mangas = document.select(".post:not(.category-gay-movies):not(.category-yaoi-anime):not(.category-gay-novels):not(.category-yaoi-games-online) > div > a")
+    private fun parseMangasPage(document: Document): MangasPage {
+        val mangas = document.select(".post:not(.sticky):not(.category-gay-movies):not(.category-yaoi-anime):not(.category-gay-novels):not(.category-yaoi-games-online) > div > a")
             .map { element ->
                 SManga.create().apply {
                     title = element.attr("title")
@@ -134,46 +112,65 @@ abstract class YaoiMangaOnline : HttpSource() {
 
     // =================== Latest ===================
 
-    override fun latestUpdatesRequest(page: Int) = throw UnsupportedOperationException()
-
-    override fun latestUpdatesParse(response: Response): MangasPage = throw UnsupportedOperationException()
+    override suspend fun getLatestUpdates(page: Int): MangasPage = throw UnsupportedOperationException()
 
     // =================== Search ===================
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = baseUrl.toHttpUrl().newBuilder().run {
-        var categoryId: String? = null
-        filters.forEach {
-            when (it) {
-                is TypeFilter -> if (it.state != 0) categoryId = it.toString()
-                is DoujinshiFilter -> if (it.state != 0) categoryId = it.toString()
-                else -> {}
-            }
-        }
-        if (categoryId != null) {
-            addQueryParameter("cat", categoryId)
-        }
-        filters.forEach {
-            when (it) {
-                is TagFilter -> if (it.state != 0) {
-                    addEncodedPathSegments("tag/$it")
-                }
-                else -> {}
-            }
-        }
-        addEncodedPathSegments("page/$page")
-        addQueryParameter("s", query)
-        GET(toString(), headers)
-    }
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val url = baseUrl.toHttpUrl().newBuilder().apply {
+            var categoryId: String? = null
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+            filters.forEach {
+                when (it) {
+                    is TypeFilter -> if (it.state != 0) categoryId = it.toString()
+                    is DoujinshiFilter -> if (it.state != 0) categoryId = it.toString()
+                    else -> {}
+                }
+            }
+
+            if (categoryId != null) {
+                addQueryParameter("cat", categoryId)
+            }
+
+            filters.forEach {
+                when (it) {
+                    is TagFilter -> if (it.state != 0) {
+                        addEncodedPathSegments("tag/$it")
+                    }
+                    else -> {}
+                }
+            }
+
+            addEncodedPathSegments("page/$page")
+            addQueryParameter("s", query)
+        }.build()
+
+        return parseMangasPage(client.get(url).asJsoup())
+    }
 
     // =================== Details ===================
 
-    override fun mangaDetailsParse(response: Response) = SManga.create().apply {
-        val document = response.asJsoup()
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (!fetchDetails && !fetchChapters) return SMangaUpdate(manga, chapters)
+
+        val document = client.get(baseUrl + manga.url).asJsoup()
+        return SMangaUpdate(
+            if (fetchDetails) mangaDetailsParse(document) else manga,
+            if (fetchChapters) chapterListParse(document) else chapters,
+        )
+    }
+
+    private fun mangaDetailsParse(document: Document) = SManga.create().apply {
         title = document.select("h1.entry-title").text()
             .substringBeforeLast("by").trim()
+
         thumbnail_url = document.selectFirst(".herald-post-thumbnail img")?.attr("src")
+
         description = document
             .select(".entry-content > p:not(:has(img)):not(:contains(You need to login))")
             .joinToString("\n\n") {
@@ -213,9 +210,7 @@ abstract class YaoiMangaOnline : HttpSource() {
 
         // KNS
         artist = author
-        // KNS
 
-        // KNS
         status = when {
             document.selectFirst(".meta-category a[href*='/ongoing/']") != null -> SManga.ONGOING
             document.selectFirst(".meta-category a[href*='/completed/']") != null -> SManga.COMPLETED
@@ -227,8 +222,7 @@ abstract class YaoiMangaOnline : HttpSource() {
 
     // =================== Chapters ===================
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val document = response.asJsoup()
+    private fun chapterListParse(document: Document): List<SChapter> {
         val chapters = document.select(".mpp-toc a").map { element ->
             SChapter.create().apply {
                 name = element.ownText()
@@ -239,7 +233,7 @@ abstract class YaoiMangaOnline : HttpSource() {
             listOf(
                 SChapter.create().apply {
                     name = "Chapter"
-                    url = response.request.url.encodedPath
+                    url = document.location().toHttpUrl().encodedPath
                 },
             )
         }.reversed()
@@ -247,18 +241,16 @@ abstract class YaoiMangaOnline : HttpSource() {
 
     // =================== Pages ===================
 
-    override fun pageListParse(response: Response) = response.asJsoup()
+    override suspend fun getPageList(chapter: SChapter): List<Page> = client.get(baseUrl + chapter.url).asJsoup()
         .select(".entry-content img")
         .mapIndexed { idx, img -> Page(idx, imageUrl = img.attr("src")) }
 
-    override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
-
-    override fun getFilterList(): FilterList {
-        fetchFilters()
+    override fun getFilterList(data: JsonElement?): FilterList {
+        val filterData = data?.parseAs<YaoiFilterData>()
         return FilterList(
-            TypeFilter(typeData),
-            DoujinshiFilter(doujinshiData),
-            TagFilter(tagData),
+            TypeFilter(filterData?.types.orEmpty()),
+            DoujinshiFilter(filterData?.doujinshi.orEmpty()),
+            TagFilter(filterData?.tags.orEmpty()),
         )
     }
 }
