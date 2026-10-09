@@ -67,7 +67,7 @@ abstract class YaoiMe : KeiSource() {
 
     override suspend fun getPopularManga(page: Int): MangasPage = browseManga(
         page = page,
-        sort = "popularity",
+        sort = "popular",
     )
 
     // ============================== Latest ===============================
@@ -127,8 +127,14 @@ abstract class YaoiMe : KeiSource() {
 
         val mangas = document
             .select("a[href^='/series/']")
-            .mapNotNull { mangaFromElement(it) }
-            .distinctBy { it.url }
+            .groupBy {
+                it.attr("href")
+                    .substringBefore("?")
+                    .trimEnd('/')
+            }
+            .mapNotNull { (_, links) ->
+                mangaFromElement(links)
+            }
 
         val hasNextPage = document
             .select("a[href*='page=']")
@@ -141,34 +147,87 @@ abstract class YaoiMe : KeiSource() {
         return MangasPage(mangas, hasNextPage)
     }
 
-    private fun mangaFromElement(element: Element): SManga? {
-        val url = element.attr("href")
-            .substringBefore("?")
+    private fun mangaFromElement(links: List<Element>): SManga? {
+        val url = links.firstOrNull()
+            ?.attr("href")
+            ?.substringBefore("?")
+            ?.trimEnd('/')
+            ?: return null
 
         if (!url.startsWith("/series/")) {
             return null
         }
 
-        val container = element.parent()
-            ?.takeIf {
-                it.select("a[href^='/series/']").size == 1
-            }
-            ?: element
+        val image = links.firstNotNullOfOrNull {
+            it.selectFirst("img")
+        } ?: links.firstOrNull()
+            ?.parent()
+            ?.selectFirst("img")
 
-        val image = element.selectFirst("img")
-            ?: container.selectFirst("img")
+        val titleCandidates = links.flatMap { link ->
+            buildList {
+                addAll(
+                    link.select("[data-testid*=title], [class*=title]")
+                        .map { it.text() },
+                )
 
-        val title = element
-            .selectFirst("h2, h3, h4")
-            ?.text()
-            ?.takeIf { it.isNotBlank() }
-            ?: image?.attr("alt")?.takeIf {
-                it.isNotBlank()
+                add(link.attr("title"))
+
+                addAll(
+                    link.select("img[alt]")
+                        .map { it.attr("alt") },
+                )
+
+                addAll(
+                    link.select("h1, h2, h3, h4")
+                        .map { it.text() },
+                )
+
+                add(link.ownText())
             }
-            ?: element.ownText().takeIf {
-                it.isNotBlank()
+        }
+
+        val invalidTitles = setOf(
+            "completed",
+            "ongoing",
+            "releasing",
+            "hiatus",
+            "cancelled",
+            "canceled",
+            "upcoming",
+            "unknown",
+            "safe",
+            "suggestive",
+            "erotica",
+            "pornographic",
+            "manga",
+            "manhwa",
+            "manhua",
+            "doujinshi",
+            "novel",
+            "other",
+            "cover",
+            "cover image",
+            "read",
+            "read now",
+            "start reading",
+        )
+
+        val title = titleCandidates
+            .map {
+                it.trim().replace(Regex("""\s+"""), " ")
             }
-            ?: element.text()
+            .firstOrNull {
+                it.isNotBlank() &&
+                    it.lowercase(Locale.ROOT) !in invalidTitles
+            }
+            ?: url.substringAfterLast('/')
+                .replace('-', ' ')
+                .replace('_', ' ')
+                .split(' ')
+                .joinToString(" ") { word ->
+                    word.replaceFirstChar { it.uppercaseChar() }
+                }
 
         if (title.isBlank()) {
             return null
