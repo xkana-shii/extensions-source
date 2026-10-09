@@ -22,6 +22,7 @@ import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.runWebView
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.double
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -83,7 +84,7 @@ abstract class Cubari :
     // KNS
 
     // History and pins only exist in the site's remoteStorage cache, reachable through its own JS
-    private suspend fun fetchHistory(): List<HistoryEntryDto> = runWebView<String>(10.seconds) {
+    private suspend fun fetchHistory(): List<HistoryEntryDto> = runWebView(10.seconds) {
         userAgent = headers["User-Agent"]!!
         jsBridge("android") { resolve(it) }
         onPageFinished {
@@ -176,7 +177,7 @@ abstract class Cubari :
 
     // The series page adds itself to the site's history. tag() is re-run so that
     // history-ready fires after our listener is attached.
-    private suspend fun tagHistory(source: String, slug: String) = runWebView<Unit>(10.seconds) {
+    private suspend fun tagHistory(source: String, slug: String) = runWebView(10.seconds) {
         userAgent = headers["User-Agent"]!!
         jsBridge("android") { resolve(Unit) }
         onPageFinished {
@@ -425,14 +426,19 @@ abstract class Cubari :
 
     private fun parseMangaList(payload: List<HistoryEntryDto>, sortType: SortType): MangasPage {
         val mangaList = payload.mapNotNull { entry ->
-            if (sortType == SortType.PINNED && entry.pinned) {
-                entry.toSManga()
-            } else if (sortType == SortType.UNPINNED && !entry.pinned) {
-                entry.toSManga()
-            } else if (sortType == SortType.ALL) {
-                entry.toSManga()
-            } else {
-                null
+            when (sortType) {
+                SortType.PINNED if entry.pinned -> {
+                    entry.toSManga()
+                }
+                SortType.UNPINNED if !entry.pinned -> {
+                    entry.toSManga()
+                }
+                SortType.ALL -> {
+                    entry.toSManga()
+                }
+                else -> {
+                    null
+                }
             }
         }
 
