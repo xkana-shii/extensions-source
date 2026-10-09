@@ -106,7 +106,7 @@ abstract class MyReadingManga :
     }
         // KNS
         .addInterceptor(LoginInterceptor())
-        // KNS
+    // KNS
 
     override val supportsLatest = true
 
