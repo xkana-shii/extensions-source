@@ -449,12 +449,10 @@ private fun PatreonAttributes.bestImageUrl(): String? {
 
 private val CREATOR_USERNAME_REGEX = Regex("[A-Za-z0-9_-]+")
 
-
 private fun PatreonAttributes.pageUsername(): String = vanity?.trim()?.takeIf { value -> value.matches(CREATOR_USERNAME_REGEX) }
     ?: url.usernameFromPatreonUrl()
     ?: urlForCurrentUser.usernameFromPatreonUrl()
     ?: "Patreon"
-
 
 internal fun String?.usernameFromPatreonUrl(): String? {
     if (isNullOrBlank()) return null
