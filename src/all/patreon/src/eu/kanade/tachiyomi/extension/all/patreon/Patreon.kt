@@ -1,3 +1,4 @@
+
 package eu.kanade.tachiyomi.extension.all.patreon
 
 import android.text.InputType
@@ -252,6 +253,48 @@ abstract class Patreon :
         }
 
         return chapters.distinctBy { chapter -> chapter.url }
+    }
+
+    override fun getMangaUrl(manga: SManga): String {
+        val url = manga.url
+
+        if (
+            url.startsWith("http://") ||
+            url.startsWith("https://")
+        ) {
+            return url
+        }
+
+        if (url.extractCampaignIdFromSourceUrl() == null) {
+            return "$baseUrl${if (url.startsWith("/")) url else "/$url"}"
+        }
+
+        val username = manga.author
+            ?.trim()
+            ?.takeIf { value ->
+                value.matches(Regex("[A-Za-z0-9_-]+")) &&
+                    !value.all { char -> char.isDigit() } &&
+                    value.lowercase() !in setOf(
+                        "patreon",
+                        "user",
+                        "home",
+                        "feed",
+                        "posts",
+                        "campaign",
+                        "login",
+                        "signup",
+                        "explore",
+                        "search",
+                        "c",
+                        "cw",
+                    )
+            }
+
+        return if (username != null) {
+            "$baseUrl/$username"
+        } else {
+            "$baseUrl$url"
+        }
     }
 
     override fun getChapterUrl(chapter: SChapter): String {

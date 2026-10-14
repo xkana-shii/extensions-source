@@ -1,3 +1,4 @@
+
 package eu.kanade.tachiyomi.extension.all.patreon
 
 import eu.kanade.tachiyomi.source.model.Page
@@ -16,6 +17,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
+import java.net.URI
 import java.util.Locale
 import kotlin.time.Instant
 
@@ -356,7 +358,7 @@ fun PatreonPost.imageUrls(
         urls.addAll(contentUrls)
     }
 
-    return urls.distinct()
+    return urls.distinctBy(String::patreonImageKey)
 }
 
 fun List<String>.toPages(): List<Page> = mapIndexed { index, url -> Page(index, imageUrl = url) }
@@ -445,24 +447,61 @@ private fun PatreonAttributes.bestImageUrl(): String? {
     }
 }
 
-private fun PatreonAttributes.pageUsername(): String = vanity?.takeIf { value -> value.isNotBlank() }
-    ?: url.usernameFromPatreonUrl()
-    ?: urlForCurrentUser.usernameFromPatreonUrl()
-    ?: name?.takeIf { value -> value.isNotBlank() }
-    ?: "Patreon"
+private val CREATOR_USERNAME_REGEX = Regex("[A-Za-z0-9_-]+")
+
+private fun PatreonAttributes.pageUsername(): String =
+    vanity?.trim()?.takeIf { value -> value.matches(CREATOR_USERNAME_REGEX) }
+        ?: url.usernameFromPatreonUrl()
+        ?: urlForCurrentUser.usernameFromPatreonUrl()
+        ?: "Patreon"
 
 internal fun String?.usernameFromPatreonUrl(): String? {
     if (isNullOrBlank()) return null
 
-    return substringBefore("?")
-        .substringBefore("#")
-        .trimEnd('/')
-        .substringAfterLast('/')
-        .takeIf { value ->
-            value.isNotBlank() &&
-                value != "www.patreon.com" &&
-                !value.contains("patreon.com")
-        }
+    val uri = runCatching { URI(trim()) }.getOrNull() ?: return null
+    val host = uri.host?.lowercase(Locale.ROOT)
+
+    if (
+        host != null &&
+        host != "patreon.com" &&
+        host != "www.patreon.com"
+    ) {
+        return null
+    }
+
+    if (host == null && !trim().startsWith("/")) {
+        return null
+    }
+
+    val segments = uri.path.orEmpty()
+        .split('/')
+        .filter { segment -> segment.isNotBlank() }
+
+    val first = segments.firstOrNull()?.lowercase(Locale.ROOT)
+
+    val username = when (first) {
+        "c", "cw" -> segments.getOrNull(1)
+        else -> segments.firstOrNull()
+    } ?: return null
+
+    return username.takeIf { value ->
+        value.matches(CREATOR_USERNAME_REGEX) &&
+            !value.all { char -> char.isDigit() } &&
+            value.lowercase(Locale.ROOT) !in setOf(
+                "home",
+                "feed",
+                "user",
+                "posts",
+                "campaign",
+                "login",
+                "signup",
+                "explore",
+                "search",
+                "membership",
+                "c",
+                "cw",
+            )
+    }
 }
 
 private fun String?.htmlToMarkdown(): String? {
@@ -619,20 +658,70 @@ private fun String.isImageUrl(): Boolean = substringBefore('?')
     .substringBefore('#')
     .isImageFileName()
 
-private fun String.extractImageUrlsFromHtml(): List<String> = Jsoup.parse(this)
-    .select("img[src], source[srcset]")
-    .flatMap { element ->
-        val src = element.attr("abs:src")
-            .ifBlank { element.attr("src") }
+private val PATREON_MEDIA_IMAGE_REGEX = Regex(
+    """/patreon-media/p/(post|campaign|user)/([^/?#]+)/([0-9a-fA-F]{32})/""",
+)
 
-        val srcset = element.attr("srcset")
-            .split(',')
-            .map { entry -> entry.trim().substringBefore(' ') }
+private fun String.patreonImageKey(): String {
+    val normalized = trim().replace("\\/", "/")
 
-        listOf(src) + srcset
+    PATREON_MEDIA_IMAGE_REGEX.find(normalized)?.let { match ->
+        val (kind, ownerId, mediaId) = match.destructured
+        val filename = normalized.substringBefore('?')
+            .substringBefore('#')
+            .substringAfterLast('/')
+
+        return "$kind/$ownerId/${mediaId.lowercase(Locale.ROOT)}/$filename"
     }
-    .filter { url -> url.startsWith("http") }
-    .distinct()
+
+    val uri = runCatching { URI(normalized) }.getOrNull()
+        ?: return normalized
+
+    val host = uri.host?.lowercase(Locale.ROOT)
+        ?: return normalized
+
+    val isPatreonCdn =
+        host == "patreonusercontent.com" ||
+            host.endsWith(".patreonusercontent.com") ||
+            host == "patreon.com" ||
+            host.endsWith(".patreon.com")
+
+    val isImagePath = uri.path.orEmpty().isImageUrl()
+
+    return if (isPatreonCdn && isImagePath) {
+        "${uri.scheme?.lowercase(Locale.ROOT)}://$host${uri.rawPath}"
+    } else {
+        normalized
+    }
+}
+
+private fun String.extractImageUrlsFromHtml(): List<String> {
+    val document = Jsoup.parseBodyFragment(this)
+
+    val imageUrls = document.select("img").mapNotNull { image ->
+        val src = image.attr("data-src").ifBlank { image.attr("src") }
+        val srcset = image.attr("data-srcset").ifBlank { image.attr("srcset") }
+
+        val srcsetUrl = srcset.split(',')
+            .map { entry -> entry.trim().substringBefore(' ') }
+            .lastOrNull { url -> url.startsWith("http") }
+
+        srcsetUrl ?: src.takeIf { url -> url.startsWith("http") }
+    }
+
+    if (imageUrls.isNotEmpty()) {
+        return imageUrls.distinctBy(String::patreonImageKey)
+    }
+
+    return document.select("source[srcset]")
+        .mapNotNull { source ->
+            source.attr("srcset")
+                .split(',')
+                .map { entry -> entry.trim().substringBefore(' ') }
+                .lastOrNull { url -> url.startsWith("http") }
+        }
+        .distinctBy(String::patreonImageKey)
+}
 
 private fun String.extractStructuredImageUrls(
     json: Json,
@@ -645,7 +734,7 @@ private fun String.extractStructuredImageUrls(
     val urls = mutableListOf<String>()
     element.collectStructuredImageUrls(includedById, urls)
 
-    return urls.distinct()
+    return urls.distinctBy(String::patreonImageKey)
 }
 
 private fun JsonElement.collectStructuredImageUrls(
@@ -702,7 +791,7 @@ private fun String.extractImageUrlsFromText(): List<String> = IMAGE_URL_REGEX
     .findAll(this)
     .map { match -> match.value.replace("\\/", "/") }
     .filter { url -> url.isImageUrl() }
-    .distinct()
+    .distinctBy(String::patreonImageKey)
     .toList()
 
 private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
