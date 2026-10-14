@@ -300,7 +300,7 @@ fun PatreonPost.toSChapter(
     campaignId: String,
     locked: Boolean = false,
 ): SChapter = SChapter.create().apply {
-    url = "/campaign/$campaignId/post/$id" + if (locked) "?locked=true" else ""
+    url = "/campaign/$campaignId/post/$id"
 
     val rawName = attributes.title?.takeIf { title -> title.isNotBlank() } ?: "Post $id"
     name = if (locked) "🔒 $rawName" else rawName
