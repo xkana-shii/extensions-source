@@ -379,8 +379,7 @@ abstract class Mangago :
         }
     }
 
-    private fun SChapter.readerUrl(): String =
-        memo["chapterUrl"]?.string ?: error("Refresh chapter list")
+    private fun SChapter.readerUrl(): String = memo["chapterUrl"]?.string ?: error("Refresh chapter list")
 
     override fun imageRequest(page: Page): Request {
         val url = page.imageUrl!!.toHttpUrl()
@@ -469,12 +468,11 @@ abstract class Mangago :
         }
     }
 
-    private fun findHexEncodedVariable(input: String, variable: String): String =
-        HEX_VARIABLE_REGEX.findAll(input)
-            .firstOrNull { it.groupValues[1] == variable }
-            ?.groupValues
-            ?.get(2)
-            .orEmpty()
+    private fun findHexEncodedVariable(input: String, variable: String): String = HEX_VARIABLE_REGEX.findAll(input)
+        .firstOrNull { it.groupValues[1] == variable }
+        ?.groupValues
+        ?.get(2)
+        .orEmpty()
 
     private fun String.unscramble(keys: List<Int>): String {
         var result = this
@@ -572,17 +570,15 @@ abstract class Mangago :
         }
     }
 
-    private fun stableChapterId(date: Long, name: String, scanlator: String?): String =
-        MessageDigest.getInstance("MD5")
-            .digest("$date:$name:${scanlator.orEmpty()}".toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .takeLast(10)
+    private fun stableChapterId(date: Long, name: String, scanlator: String?): String = MessageDigest.getInstance("MD5")
+        .digest("$date:$name:${scanlator.orEmpty()}".toByteArray())
+        .joinToString("") { "%02x".format(it) }
+        .takeLast(10)
 
-    private fun String.removeTitleInfo(regex: Regex, removed: MutableList<String>) =
-        replace(regex) {
-            removed += it.value
-            ""
-        }.trim()
+    private fun String.removeTitleInfo(regex: Regex, removed: MutableList<String>) = replace(regex) {
+        removed += it.value
+        ""
+    }.trim()
 
     private val scanlatorBlacklist: Set<String>
         get() = preferences.getString(PREF_SCANLATOR_BLACKLIST, "")
@@ -591,13 +587,11 @@ abstract class Mangago :
             ?.filter { it.isNotEmpty() }
             ?.toSet() ?: emptySet()
 
-    private fun isRemoveTitleVersion() =
-        preferences.getBoolean(REMOVE_TITLE_VERSION_PREF, false)
+    private fun isRemoveTitleVersion() = preferences.getBoolean(REMOVE_TITLE_VERSION_PREF, false)
 
-    private fun customTitleRegex() =
-        preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", null)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { Regex(it, RegexOption.IGNORE_CASE) }
+    private fun customTitleRegex() = preferences.getString("${REMOVE_TITLE_CUSTOM_PREF}_$lang", null)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { Regex(it, RegexOption.IGNORE_CASE) }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
@@ -687,7 +681,7 @@ private val REPLACE_POS_BYTECODE by lazy {
         it.compile(
             """
                     function replacePos(strObj, pos, replacetext) {
-                        var str = strObj.substr(0, pos) + replacetext + strObj.substring(pos + 1, strObj.length);
+                        var str = strObj.substr(0, pos) + replacetext + strObj.substring(pos + 1, str.length);
                         return str;
                     }
             """.trimIndent(),
