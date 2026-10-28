@@ -98,7 +98,11 @@ abstract class Mangago :
 
     private fun mangaFromElement(element: Element): SManga? {
         val link = element.selectFirst(".thm-effect") ?: return null
-        val title = link.attr("title").takeIf { it.isNotBlank() } ?: return null
+        val title = link.attr("title")
+            .takeIf { it.isNotBlank() }
+            ?.let(::decodeHtmlEntities)
+            ?: return null
+
         return SManga.create().apply {
             setUrlWithoutDomain(link.absUrl("href"))
             this.title = title
@@ -165,13 +169,19 @@ abstract class Mangago :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val document = client.get(getMangaUrl(manga)).asJsoup()
-        return SMangaUpdate(parseMangaDetails(document), parseChapterList(document))
+        val details = parseMangaDetails(document)
+
+        if (parseSynopsis(document) == null && !manga.description.isNullOrBlank()) {
+            details.description = manga.description
+        }
+
+        return SMangaUpdate(details, parseChapterList(document))
     }
 
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         val removedTitleInfo = mutableListOf<String>()
 
-        document.selectFirst(".w-title h1")?.text()?.let { originalTitle ->
+        document.selectFirst(".w-title h1")?.text()?.let(::decodeHtmlEntities)?.let { originalTitle ->
             title = originalTitle
             if (isRemoveTitleVersion()) {
                 title = title.removeTitleInfo(TITLE_REGEX, removedTitleInfo)
@@ -183,15 +193,13 @@ abstract class Mangago :
 
         document.getElementById("information")?.let { info ->
             thumbnail_url = info.selectFirst("img")?.attr("abs:src")
-            description = info.selectFirst(".manga_summary")
-                ?.ownText()
-                ?.takeIf { it.isNotEmpty() && !it.equals("not found...", ignoreCase = true) }
+            description = parseSynopsis(document)
 
             info.select(".manga_info li, .manga_right tr").forEach { element ->
                 val label = element.selectFirst("b, label")?.text().orEmpty()
                 when (label.lowercase()) {
                     "alternative:" -> {
-                        val raw = element.text().removePrefix(label).trim()
+                        val raw = decodeHtmlEntities(element.text().removePrefix(label).trim())
                         val altNames = if ('/' in raw || ';' in raw) {
                             raw.split('/', ';')
                         } else {
@@ -230,13 +238,20 @@ abstract class Mangago :
         }
     }
 
+    private fun parseSynopsis(document: Document): String? = document.getElementById("information")
+        ?.selectFirst(".manga_summary")
+        ?.text()
+        ?.let(::decodeHtmlEntities)
+        ?.takeIf { it.isNotBlank() && !it.equals("not found...", ignoreCase = true) }
+
     /**
-     * Decode chapter names containing malformed, normal,
-     * or double-encoded HTML entities.
+     * Decode malformed, normal, or double-encoded HTML
+     * entities in displayed manga and chapter text.
      *
-     * The original name is preserved separately for chapter IDs.
+     * The original chapter name is preserved separately
+     * for stable chapter IDs.
      */
-    private fun decodeChapterName(rawName: String): String {
+    private fun decodeHtmlEntities(rawName: String): String {
         var result = rawName
 
         val malformedNumericEntity = Regex("""&(\d{2,7});""")
@@ -275,7 +290,7 @@ abstract class Mangago :
 
                 // Keep the original text for stable chapter IDs.
                 val originalName = link.text().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-                val name = decodeChapterName(originalName)
+                val name = decodeHtmlEntities(originalName)
                 val date = DATE_FORMAT.tryParseDate(element.select("td:last-child").text(), ZoneOffset.UTC)
                 val scanlator = element.selectFirst("td.no a, td.uk-table-shrink a")
                     ?.text()
@@ -311,7 +326,7 @@ abstract class Mangago :
 
             SManga.create().apply {
                 setUrlWithoutDomain(link.absUrl("href"))
-                this.title = title
+                this.title = decodeHtmlEntities(title)
                 thumbnail_url = element.selectFirst("img")?.imgAttr()
             }
         }
