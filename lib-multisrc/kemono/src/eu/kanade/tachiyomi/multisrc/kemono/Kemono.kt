@@ -277,7 +277,7 @@ abstract class Kemono :
         return postData.post.images.mapIndexed { i, path -> Page(i, imageUrl = "$baseUrl/$dataPath$path") }
     }
 
-    override fun imageRequest(page: Page): Request {
+    override fun getImageRequest(page: Page): Request {
         val imageUrl = page.imageUrl!!
 
         if (!preferences.getBoolean(USE_LOW_RES_IMG, false)) return Request.Builder().url(imageUrl).headers(headers).build()
