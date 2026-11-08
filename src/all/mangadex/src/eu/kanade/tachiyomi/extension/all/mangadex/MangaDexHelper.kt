@@ -34,6 +34,9 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.lib.i18n.Intl
+import keiyoushi.network.Fetch
+import keiyoushi.network.fetch
+import keiyoushi.utils.parseAs
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
@@ -50,7 +53,7 @@ import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-class MangaDexHelper(lang: String) {
+class MangaDexHelper(private val lang: String) {
 
     val mdFilters = MangaDexFilters()
 
@@ -108,12 +111,11 @@ class MangaDexHelper(lang: String) {
     /**
      * Get chapters for manga (aka manga/$id/feed endpoint)
      */
-    fun getChapterEndpoint(mangaId: String, offset: Int, langCode: String) = "${MDConstants.API_MANGA_URL}/$mangaId/feed".toHttpUrl().newBuilder()
+    fun getChapterEndpoint(mangaId: String, offset: Int) = "${MDConstants.API_MANGA_URL}/$mangaId/feed".toHttpUrl().newBuilder()
         .addQueryParameter("includes[]", MDConstants.SCANLATION_GROUP)
         .addQueryParameter("includes[]", MDConstants.USER)
         .addQueryParameter("limit", "500")
         .addQueryParameter("offset", offset.toString())
-        .addQueryParameter("translatedLanguage[]", langCode)
         .addQueryParameter("order[volume]", "desc")
         .addQueryParameter("order[chapter]", "desc")
         .addQueryParameter("includeFuturePublishAt", "0")
@@ -234,7 +236,7 @@ class MangaDexHelper(lang: String) {
             return getMdAtHomeUrl(tokenRequestUrl, client, headers, CacheControl.FORCE_NETWORK)
         }
 
-        return response.use { json.decodeFromString<AtHomeDto>(it.body.string()).baseUrl }
+        return response.parseAs<AtHomeDto>(json).baseUrl
     }
 
     /**
@@ -249,7 +251,7 @@ class MangaDexHelper(lang: String) {
             tokenTracker[tokenRequestUrl] = System.currentTimeMillis()
         }
 
-        return GET(tokenRequestUrl, headers, cacheControl)
+        return GET(tokenRequestUrl, headers, cacheControl).newBuilder().fetch(Fetch.XHR).build()
     }
 
     fun mdAtHomeRefresh(tokenRequestUrl: String) {
@@ -447,11 +449,13 @@ class MangaDexHelper(lang: String) {
             ""
         }
 
+        val languagePrefix = if (lang == MDConstants.ALL_LANGUAGES) "[${attr.translatedLanguage}] " else ""
+
         return SChapter.create().apply {
             url = "/chapter/${chapterDataDto.id}"
             name = chapterName.joinToString(" ").removeEntities()
             date_upload = Instant.tryParse(attr.publishAt)
-            scanlator = unavailablePrefix + groups
+            scanlator = languagePrefix + unavailablePrefix + groups
         }
     }
 

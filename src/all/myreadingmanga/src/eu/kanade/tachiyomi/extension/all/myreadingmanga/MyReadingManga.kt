@@ -18,6 +18,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.applicationContext
@@ -187,13 +188,13 @@ abstract class MyReadingManga :
 
     // Popular - Random
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = client.get("$baseUrl/page/$page/?s=&ep_sort=rand&ep_filter_lang=$siteLang").asJsoup() // Random Manga as returned by search
+        val document = client.get("$baseUrl/page/$page/?s=&ep_sort=rand&ep_filter_lang=$siteLang", Fetch.DOCUMENT).asJsoup() // Random Manga as returned by search
         return searchMangaParse(document)
     }
 
     // Latest
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val document = client.get("$baseUrl/lang/${latestLang.lowercase()}" + if (page > 1) "/page/$page/" else "").asJsoup() // Home Page - Latest Manga
+        val document = client.get("$baseUrl/lang/${latestLang.lowercase()}" + if (page > 1) "/page/$page/" else "", Fetch.DOCUMENT).asJsoup() // Home Page - Latest Manga
         val mangas = document.select("article:not(.category-video)").map { element ->
             buildManga(element.selectFirst("a[rel]")!!, element.selectFirst("a.entry-image-link img"))
         }
@@ -216,7 +217,7 @@ abstract class MyReadingManga :
             }
         }
 
-        return searchMangaParse(client.get(uri.toString()).asJsoup())
+        return searchMangaParse(client.get(uri.toString(), Fetch.DOCUMENT).asJsoup())
     }
 
     private var mangaParsedSoFar = 0
@@ -276,9 +277,9 @@ abstract class MyReadingManga :
         if (!fetchDetails && !fetchChapters) return SMangaUpdate(manga, chapters)
 
         val needCover = fetchDetails &&
-            (manga.thumbnail_url?.let { url -> client.get(url, ensureSuccess = false).use { !it.isSuccessful } } ?: true)
+            (manga.thumbnail_url?.let { url -> client.get(url, Fetch.IMAGE, ensureSuccess = false).use { !it.isSuccessful } } ?: true)
 
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
 
         val updatedManga = if (fetchDetails) {
             mangaDetailsParse(document, needCover).apply { initialized = true }
@@ -314,7 +315,7 @@ abstract class MyReadingManga :
         }
 
         if (needCover) {
-            thumbnail_url = client.get("$baseUrl/?s=${document.location()}").asJsoup()
+            thumbnail_url = client.get("$baseUrl/?s=${document.location()}", Fetch.DOCUMENT).asJsoup()
                 .selectFirst("div.ep-search-content div.entry-content img")
                 ?.let {
                     getThumbnail(getImage(it))
@@ -356,7 +357,7 @@ abstract class MyReadingManga :
 
     // Pages
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val document = client.get(getChapterUrl(chapter)).asJsoup()
+        val document = client.get(getChapterUrl(chapter), Fetch.DOCUMENT).asJsoup()
         return (document.select("div.entry-content img") + document.select("div.separator img[data-src]"))
             .mapNotNull { getImage(it) }
             .distinct()
@@ -367,7 +368,7 @@ abstract class MyReadingManga :
     override val supportsFilterFetching get() = true
 
     override suspend fun fetchFilterData(): JsonElement {
-        suspend fun fetchFilter(url: String, css: String): List<Pair<String, String>> = client.get(url).asJsoup()
+        suspend fun fetchFilter(url: String, css: String): List<Pair<String, String>> = client.get(url, Fetch.DOCUMENT).asJsoup()
             .select(css)
             .map { Pair(it.text(), it.attr("href").split("/").dropLast(1).lastOrNull() ?: "") }
 

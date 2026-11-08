@@ -1,50 +1,18 @@
-
-@file:Suppress("SpellCheckingInspection")
-
 package eu.kanade.tachiyomi.extension.all.yaoimangaonline
 
 import eu.kanade.tachiyomi.source.model.Filter
 import kotlinx.serialization.Serializable
 
 @Serializable
-class YaoiFilterOption(
-    val name: String,
-    val value: String,
-)
+class FilterData(val categories: List<Option>, val tags: List<Option>)
 
 @Serializable
-class YaoiFilterData(
-    val types: List<YaoiFilterOption>,
-    val doujinshi: List<YaoiFilterOption>,
-    val tags: List<YaoiFilterOption>,
-)
+class Option(val name: String, val value: String)
 
-class TypeFilter(
-    values: List<YaoiFilterOption> = emptyList(),
-) : Filter.Select<String>(
-    "Type",
-    (listOf("ALL") + values.map { it.name }).toTypedArray(),
-) {
-    private val vals = listOf("") + values.map { it.value }
-    override fun toString() = vals[state].trim()
+class CategoryFilter(private val options: List<Option>) : Filter.Select<String>("Category", (listOf("All") + options.map { it.name }).toTypedArray()) {
+    val selected get() = options.getOrNull(state - 1)?.value
 }
 
-class DoujinshiFilter(
-    values: List<YaoiFilterOption> = emptyList(),
-) : Filter.Select<String>(
-    "Doujinshi",
-    (listOf("ALL") + values.map { it.name }).toTypedArray(),
-) {
-    private val vals = listOf("") + values.map { it.value }
-    override fun toString() = vals[state].trim()
-}
+class TagCheckBox(name: String, val value: String) : Filter.CheckBox(name)
 
-class TagFilter(
-    values: List<YaoiFilterOption> = emptyList(),
-) : Filter.Select<String>(
-    "Tag",
-    (listOf("ALL") + values.map { it.name }).toTypedArray(),
-) {
-    private val vals = listOf("") + values.map { it.value }
-    override fun toString() = vals[state].trim()
-}
+class TagFilter(tags: List<Option>) : Filter.Group<TagCheckBox>("Tags", tags.map { TagCheckBox(it.name, it.value) })

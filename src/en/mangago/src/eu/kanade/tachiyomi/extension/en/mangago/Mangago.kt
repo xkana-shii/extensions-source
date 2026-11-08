@@ -22,6 +22,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.addCookie
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
@@ -63,7 +64,6 @@ import javax.crypto.spec.IvParameterSpec
 abstract class Mangago :
     KeiSource(),
     ConfigurableSource {
-
     private val preferences = getPreferences()
 
     override fun OkHttpClient.Builder.configureClient() = apply {
@@ -79,12 +79,12 @@ abstract class Mangago :
     }
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.get("$baseUrl/genre/all/$page/?f=1&o=1&sortby=view&e=")
+        val response = client.get("$baseUrl/genre/all/$page/?f=1&o=1&sortby=view&e=", Fetch.DOCUMENT)
         return parseMangasPage(response)
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.get("$baseUrl/genre/all/$page/?f=1&o=1&sortby=update_date&e=")
+        val response = client.get("$baseUrl/genre/all/$page/?f=1&o=1&sortby=update_date&e=", Fetch.DOCUMENT)
         return parseMangasPage(response)
     }
 
@@ -140,7 +140,7 @@ abstract class Mangago :
             }.build()
         }
 
-        return parseMangasPage(client.get(url))
+        return parseMangasPage(client.get(url, Fetch.DOCUMENT))
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
@@ -168,7 +168,7 @@ abstract class Mangago :
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
         val details = parseMangaDetails(document)
 
         if (parseSynopsis(document) == null && !manga.description.isNullOrBlank()) {
@@ -313,7 +313,7 @@ abstract class Mangago :
     override val supportsRelatedMangas = true
 
     override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> {
-        val document = client.get(getMangaUrl(manga)).asJsoup()
+        val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
         val sameAuthor = document
             .select("div.also_like:has(h4:contains(Other manga by the same author)) + .pic_list .updatesli")
             .mapNotNull(::mangaFromElement)
@@ -339,7 +339,7 @@ abstract class Mangago :
     private val pageBatchCache = LruCache<String, MutableMap<Int, String>>(10)
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val document = client.get(chapter.readerUrl()).asJsoup()
+        val document = client.get(chapter.readerUrl(), Fetch.DOCUMENT).asJsoup()
         val availableImages = getChapterImageUrls(document)
         val totalPages = document.selectFirst("script:containsData(total_pages)")
             ?.data()
@@ -378,7 +378,7 @@ abstract class Mangago :
 
         return pageBatchMutex.withLock {
             val batch = pageBatchCache[batchUrl] ?: run {
-                val document = client.get(batchUrl).asJsoup()
+                val document = client.get(batchUrl, Fetch.DOCUMENT).asJsoup()
                 getChapterImageUrls(document)
                     .mapIndexedNotNull { imageIndex, imageUrl ->
                         imageUrl.takeIf { it.isNotEmpty() }?.let { imageIndex to it }
@@ -396,7 +396,7 @@ abstract class Mangago :
 
     private fun SChapter.readerUrl(): String = memo["chapterUrl"]?.string ?: error("Refresh chapter list")
 
-    override fun imageRequest(page: Page): Request {
+    override fun getImageRequest(page: Page): Request {
         val url = page.imageUrl!!.toHttpUrl()
         val imageUrl = if (url.host.contains("_")) {
             url.newBuilder().scheme("http").build()
@@ -424,7 +424,7 @@ abstract class Mangago :
     override val supportsFilterFetching = true
 
     override suspend fun fetchFilterData(): JsonElement {
-        val document = client.get("$baseUrl/genre/all/").asJsoup()
+        val document = client.get("$baseUrl/genre/all/", Fetch.DOCUMENT).asJsoup()
         return document.select("#genre_panel .genre_select_div[_id]")
             .map { it.attr("_id") }
             .filter { it.isNotEmpty() }
@@ -453,7 +453,7 @@ abstract class Mangago :
 
         val chapterJsUrl = document.selectFirst("script[src*=chapter.js]")?.absUrl("src")
             ?: return emptyList()
-        val chapterJs = client.get(chapterJsUrl).use {
+        val chapterJs = client.get(chapterJsUrl, Fetch.SCRIPT).use {
             SoJsonV4Deobfuscator.decode(it.body.string())
         }
         val key = findHexEncodedVariable(chapterJs, "key").decodeHex()

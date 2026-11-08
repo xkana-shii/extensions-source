@@ -5,9 +5,9 @@ plugins {
 }
 
 keiyoushi {
-    name = "Desire Scans"
+    name = "DesireScans"
     versionCode = 1
-    contentWarning = ContentWarning.MIXED
+    contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 
     source {

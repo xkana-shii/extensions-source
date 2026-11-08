@@ -16,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -86,11 +87,11 @@ abstract class Cubari :
     // History and pins only exist in the site's remoteStorage cache, reachable through its own JS
     private suspend fun fetchHistory(): List<HistoryEntryDto> = runWebView(10.seconds) {
         userAgent = headers["User-Agent"]!!
-        jsBridge("android") { resolve(it) }
+        webMessageBridge("android", setOf(baseUrl)) { resolve(it) }
         onPageFinished {
             evaluateJs(
                 "Promise.all([globalHistoryHandler.getAllPinnedSeries(), globalHistoryHandler.getAllUnpinnedSeries()])" +
-                    ".then(e => android.post(JSON.stringify(e.flat())))",
+                    ".then(e => android.postMessage(JSON.stringify(e.flat())))",
             )
         }
         loadUrl("$baseUrl/")
@@ -116,7 +117,7 @@ abstract class Cubari :
     ): SMangaUpdate {
         if (!fetchDetails && !fetchChapters) return SMangaUpdate(manga, chapters)
 
-        val series = client.get(seriesApiUrl(manga.url)).parseAs<SeriesDto>()
+        val series = client.get(seriesApiUrl(manga.url), Fetch.XHR).parseAs<SeriesDto>()
 
         return SMangaUpdate(
             if (fetchDetails) series.toSManga(manga.url) else manga,
@@ -126,17 +127,17 @@ abstract class Cubari :
 
     override suspend fun getPageList(chapter: SChapter): List<Page> = when {
         chapter.url.contains("/chapter/") -> {
-            client.get("$baseUrl${chapter.url}")
+            client.get("$baseUrl${chapter.url}", Fetch.XHR)
                 .parseAs<JsonArray>()
                 .mapIndexed { i, jsonEl ->
                     // KNS
-                    Page(i, "", proxyUrlIfGithubHost(jsonEl.pageSrc()))
+                    Page(i, imageUrl = proxyUrlIfGithubHost(jsonEl.pageSrc()))
                     // KNS
                 }
         }
 
         else -> {
-            val series = client.get(seriesApiUrl(chapter.url)).parseAs<SeriesDto>()
+            val series = client.get(seriesApiUrl(chapter.url), Fetch.XHR).parseAs<SeriesDto>()
             seriesJsonPageListParse(series, chapter)
         }
     }
@@ -157,7 +158,7 @@ abstract class Cubari :
 
         return pages.mapIndexed { i, jsonEl ->
             // KNS
-            Page(i, "", proxyUrlIfGithubHost(jsonEl.pageSrc()))
+            Page(i, imageUrl = proxyUrlIfGithubHost(jsonEl.pageSrc()))
             // KNS
         }
     }
@@ -168,7 +169,7 @@ abstract class Cubari :
     }
 
     private suspend fun fetchSeries(source: String, slug: String): SManga {
-        val series = client.get("$baseUrl/read/api/$source/series/$slug/").parseAs<SeriesDto>()
+        val series = client.get("$baseUrl/read/api/$source/series/$slug/", Fetch.XHR).parseAs<SeriesDto>()
         // Only tag for recently read on search; a failed tag shouldn't fail the search
         runCatching { tagHistory(source, slug) }
 
@@ -179,9 +180,9 @@ abstract class Cubari :
     // history-ready fires after our listener is attached.
     private suspend fun tagHistory(source: String, slug: String) = runWebView(10.seconds) {
         userAgent = headers["User-Agent"]!!
-        jsBridge("android") { resolve(Unit) }
+        webMessageBridge("android", setOf(baseUrl)) { resolve(Unit) }
         onPageFinished {
-            evaluateJs("window.addEventListener('history-ready', () => android.post(''), { once: true }); tag();")
+            evaluateJs("window.addEventListener('history-ready', () => android.postMessage(''), { once: true }); tag();")
         }
         loadUrl("$baseUrl/read/$source/$slug/")
     }
@@ -397,7 +398,7 @@ abstract class Cubari :
                 val releaseDate = chapterObj.releaseDate?.get(groupNum)
 
                 SChapter.create().apply {
-                    scanlator = series.groups[groupNum]!!
+                    scanlator = series.groups[groupNum]?.ifEmpty { null }
                     chapter_number = chapterNum.toFloatOrNull() ?: -1f
 
                     date_upload = if (releaseDate != null) {
@@ -467,9 +468,6 @@ abstract class Cubari :
     // KNS
 
     companion object {
-        const val AUTHOR_FALLBACK = "Unknown"
-        const val ARTIST_FALLBACK = "Unknown"
-        const val DESCRIPTION_FALLBACK = "No description."
         const val SEARCH_FALLBACK_MSG = "Please enter a valid Cubari URL"
 
         // KNS

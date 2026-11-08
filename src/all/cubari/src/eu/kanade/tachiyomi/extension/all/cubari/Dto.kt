@@ -115,5 +115,8 @@ private fun createManga(
     // KNS
 
     this.url = url
-    thumbnail_url = cover ?: ""
+    thumbnail_url = cover
 }
+
+// Status line some gists write next to the "Tags: " one
+private val STATUS_REGEX = Regex("""^Status: *(.+)$\R*""", RegexOption.MULTILINE)

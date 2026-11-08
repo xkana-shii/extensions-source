@@ -1,171 +1,98 @@
 package eu.kanade.tachiyomi.extension.en.desirescans
 
 import eu.kanade.tachiyomi.source.model.Filter
+import eu.kanade.tachiyomi.source.model.FilterList
+import okhttp3.HttpUrl
 
-internal class SortFilter :
-    Filter.Sort(
-        "Sort",
-        SORT_OPTIONS.map { it.first }.toTypedArray(),
-        Filter.Sort.Selection(0, false),
-    ) {
+fun getFilters() = FilterList(
+    SortFilter(),
+    GenreFilter(),
+    CheckBoxGroup("Type", "type", TYPES),
+    CheckBoxGroup("Status", "status", STATUSES),
+)
 
-    val value: String
-        get() = SORT_OPTIONS[state?.index ?: 0].second
+interface UrlFilter {
+    fun addTo(url: HttpUrl.Builder)
+}
 
-    companion object {
-        private val SORT_OPTIONS = arrayOf(
-            "Recently Updated" to "",
-            "Most Bookmarked" to "popular",
-            "Most Viewed" to "views",
-            "Longest" to "chapters",
-            "Trending" to "trending",
-            "Top Rated" to "rating",
-            "Newest" to "newest",
-        )
+class SortFilter :
+    Filter.Select<String>("Sort by", SORTS.map { it.first }.toTypedArray()),
+    UrlFilter {
+    override fun addTo(url: HttpUrl.Builder) {
+        url.addQueryParameter("sort", SORTS[state].second)
     }
 }
 
-internal class TypeFilter :
-    Filter.Group<TypeCheckBox>(
-        "Types",
-        TYPE_OPTIONS.map { (name, value) ->
-            TypeCheckBox(name, value)
-        },
-    ) {
+class Genre(name: String, val slug: String) : Filter.TriState(name)
 
-    val selectedValues: List<String>
-        get() = state
-            .filter { it.state }
-            .map { it.value }
-
-    companion object {
-        private val TYPE_OPTIONS = arrayOf(
-            "Manhwa" to "Manhwa",
-            "Manhua" to "Manhua",
-            "Manga" to "Manga",
-            "Webtoon" to "Webtoon",
-        )
+class GenreFilter :
+    Filter.Group<Genre>("Genres", GENRES.map { Genre(it.first, it.second) }),
+    UrlFilter {
+    override fun addTo(url: HttpUrl.Builder) {
+        state.filter { it.isIncluded() }.ifEmpty { null }?.let { url.addQueryParameter("genre", it.joinToString(",") { genre -> genre.slug }) }
+        state.filter { it.isExcluded() }.ifEmpty { null }?.let { url.addQueryParameter("exgenre", it.joinToString(",") { genre -> genre.slug }) }
     }
 }
 
-internal class TypeCheckBox(
-    name: String,
-    val value: String,
-) : Filter.CheckBox(name, true)
+class CheckBox(name: String, val value: String) : Filter.CheckBox(name)
 
-internal class StatusFilter :
-    Filter.Select<String>(
-        "Status",
-        STATUS_OPTIONS.map { it.first }.toTypedArray(),
-    ) {
-
-    val value: String
-        get() = STATUS_OPTIONS[state].second
-
-    companion object {
-        private val STATUS_OPTIONS = arrayOf(
-            "All" to "",
-            "Ongoing" to "ONGOING",
-            "Completed" to "COMPLETED",
-            "Hiatus" to "HIATUS",
-            "Dropped" to "DROPPED",
-            "Discontinued" to "DISCONTINUED",
-            "Upcoming" to "UPCOMING",
-        )
+class CheckBoxGroup(name: String, private val param: String, options: List<Pair<String, String>>) :
+    Filter.Group<CheckBox>(name, options.map { CheckBox(it.first, it.second) }),
+    UrlFilter {
+    override fun addTo(url: HttpUrl.Builder) {
+        state.filter { it.state }.ifEmpty { null }?.let { url.addQueryParameter(param, it.joinToString(",") { box -> box.value }) }
     }
 }
 
-internal class OriginFilter :
-    Filter.Select<String>(
-        "Origin",
-        ORIGIN_OPTIONS.map { it.first }.toTypedArray(),
-    ) {
+private val SORTS = listOf(
+    "Most bookmarked" to "popular",
+    "Recently updated" to "updated",
+    "Most viewed" to "views",
+    "Longest" to "longest",
+    "Trending" to "trending",
+    "Top rated" to "rating",
+    "Newest" to "newest",
+)
 
-    val value: String
-        get() = ORIGIN_OPTIONS[state].second
+private val TYPES = listOf(
+    "Manhwa" to "manhwa",
+    "Manhua" to "manhua",
+    "Manga" to "manga",
+)
 
-    companion object {
-        private val ORIGIN_OPTIONS = arrayOf(
-            "All Origins" to "",
-            "Korean" to "KOREAN",
-            "Japanese" to "JAPANESE",
-            "Chinese" to "CHINESE",
-            "Other" to "OTHER",
-        )
-    }
-}
+private val STATUSES = listOf(
+    "Ongoing" to "ongoing",
+    "Completed" to "completed",
+    "Hiatus" to "hiatus",
+    "Dropped" to "dropped",
+)
 
-internal class OnSaleFilter : Filter.CheckBox("On Sale")
-
-internal class HasImagesFilter : Filter.CheckBox("Has Images")
-
-internal class MinimumChaptersFilter : Filter.Text("Minimum chapters")
-
-internal class MaximumChaptersFilter : Filter.Text("Maximum chapters")
-
-internal class GenreFilter(
-    options: List<OptionDto>,
-) : Filter.Group<UriPartTriState>(
-    "Genres",
-    options.map { option ->
-        UriPartTriState(
-            name = option.name,
-            value = option.slug,
-        )
-    },
-) {
-
-    val includedValues: List<String>
-        get() = state
-            .filter {
-                it.state == Filter.TriState.STATE_INCLUDE
-            }
-            .map {
-                it.value
-            }
-
-    val excludedValues: List<String>
-        get() = state
-            .filter {
-                it.state == Filter.TriState.STATE_EXCLUDE
-            }
-            .map {
-                it.value
-            }
-}
-
-internal class TagFilter(
-    options: List<OptionDto>,
-) : Filter.Group<UriPartTriState>(
-    "Tags",
-    options.map { option ->
-        UriPartTriState(
-            name = option.name,
-            value = option.slug,
-        )
-    },
-) {
-
-    val includedValues: List<String>
-        get() = state
-            .filter {
-                it.state == Filter.TriState.STATE_INCLUDE
-            }
-            .map {
-                it.value
-            }
-
-    val excludedValues: List<String>
-        get() = state
-            .filter {
-                it.state == Filter.TriState.STATE_EXCLUDE
-            }
-            .map {
-                it.value
-            }
-}
-
-internal class UriPartTriState(
-    name: String,
-    val value: String,
-) : Filter.TriState(name)
+private val GENRES = listOf(
+    "Action" to "action",
+    "Adult" to "adult",
+    "Adventure" to "adventure",
+    "Comedy" to "comedy",
+    "Drama" to "drama",
+    "Fantasy" to "fantasy",
+    "Gender Bender" to "gender-bender",
+    "Harem" to "harem",
+    "Historical" to "historical",
+    "Horror" to "horror",
+    "Josei" to "josei",
+    "Martial Arts" to "martial-arts",
+    "Mature" to "mature",
+    "Mystery" to "mystery",
+    "Psychological" to "psychological",
+    "Romance" to "romance",
+    "School Life" to "school-life",
+    "Seinen" to "seinen",
+    "Shoujo" to "shoujo",
+    "Shounen" to "shounen",
+    "Shounen Ai" to "shounen-ai",
+    "Slice of Life" to "slice-of-life",
+    "Smut" to "smut",
+    "Sports" to "sports",
+    "Supernatural" to "supernatural",
+    "Tragedy" to "tragedy",
+    "Yaoi" to "yaoi",
+)
