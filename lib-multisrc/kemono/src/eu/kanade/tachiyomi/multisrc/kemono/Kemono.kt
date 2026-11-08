@@ -386,6 +386,7 @@ abstract class Kemono :
         val response = client.post(
             "$baseUrl/v1/authentication/login",
             headers.newBuilder().set("Accept", "application/json").build(),
+            Fetch.XHR,
             body,
             ensureSuccess = false,
         )

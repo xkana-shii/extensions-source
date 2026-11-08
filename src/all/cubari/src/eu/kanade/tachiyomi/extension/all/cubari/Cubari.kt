@@ -278,6 +278,7 @@ abstract class Cubari :
         val repository = client.get(
             "https://api.github.com/repos/$repo",
             githubHeaders(),
+            Fetch.XHR,
         ).parseAs<GithubRepositoryDto>()
 
         val branch = repository.defaultBranch
@@ -285,6 +286,7 @@ abstract class Cubari :
         val tree = client.get(
             "https://api.github.com/repos/$repo/git/trees/$branch?recursive=1",
             githubHeaders(),
+            Fetch.XHR,
         ).parseAs<GithubTreeDto>()
 
         val jsonPaths = tree.tree
@@ -300,7 +302,7 @@ abstract class Cubari :
             val rawUrl = "https://raw.githubusercontent.com/$repo/$branch/$path"
 
             runCatching {
-                val json = client.get(rawUrl).parseAs<GithubMangaDto>()
+                val json = client.get(rawUrl, Fetch.XHR).parseAs<GithubMangaDto>()
                 val descField = json.description
 
                 if (expectedLang != null && extractSupportedLang(descField) != expectedLang) {
@@ -468,6 +470,9 @@ abstract class Cubari :
     // KNS
 
     companion object {
+        const val AUTHOR_FALLBACK = "Unknown"
+        const val ARTIST_FALLBACK = "Unknown"
+        const val DESCRIPTION_FALLBACK = "No description."
         const val SEARCH_FALLBACK_MSG = "Please enter a valid Cubari URL"
 
         // KNS
