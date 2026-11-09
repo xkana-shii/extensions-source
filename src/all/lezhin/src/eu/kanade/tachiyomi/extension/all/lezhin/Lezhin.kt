@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -234,6 +235,7 @@ abstract class Lezhin :
                 authorizedHeaders(
                     adult = true,
                 ),
+                Fetch.DOCUMENT,
             )
             .use {
                 Jsoup.parse(
@@ -644,6 +646,7 @@ abstract class Lezhin :
                 authorizedHeaders(
                     adult = true,
                 ),
+                Fetch.DOCUMENT,
             )
             .use {
                 it.body.string()
@@ -749,6 +752,7 @@ abstract class Lezhin :
                 authorizedHeaders(
                     adult = true,
                 ),
+                Fetch.DOCUMENT,
             )
             .use {
                 Jsoup.parse(
@@ -791,6 +795,7 @@ abstract class Lezhin :
                 authorizedHeaders(
                     adult = true,
                 ),
+                Fetch.DOCUMENT,
             )
             .use {
                 Jsoup.parse(
@@ -1642,6 +1647,7 @@ abstract class Lezhin :
                 authorizedHeaders(
                     adult = true,
                 ),
+                Fetch.DOCUMENT,
             )
             .use {
                 Jsoup.parse(
@@ -2137,6 +2143,7 @@ abstract class Lezhin :
                     .get(
                         baseUrl,
                         headers,
+                        Fetch.DOCUMENT,
                         ensureSuccess =
                         false,
                     )
@@ -2201,7 +2208,7 @@ abstract class Lezhin :
                     var submitted =
                         false
 
-                    jsBridge(
+                    webMessageBridge(
                         LOGIN_BRIDGE,
                     ) { message ->
                         resolve(
@@ -2249,11 +2256,11 @@ abstract class Lezhin :
 
                                     const text = await response.text();
 
-                                    window.$LOGIN_BRIDGE.post(
+                                    window.$LOGIN_BRIDGE.postMessage(
                                         text
                                     );
                                 } catch (error) {
-                                    window.$LOGIN_BRIDGE.post(
+                                    window.$LOGIN_BRIDGE.postMessage(
                                         JSON.stringify({
                                             error: String(error)
                                         })
@@ -2342,6 +2349,7 @@ abstract class Lezhin :
                 .post(
                     "$baseUrl/api/locale",
                     authorizedHeaders(),
+                    Fetch.XHR,
                     body,
                     ensureSuccess =
                     false,
@@ -2377,6 +2385,7 @@ abstract class Lezhin :
                     .get(
                         "$baseUrl/account",
                         authorizedHeaders(),
+                        Fetch.DOCUMENT,
                         ensureSuccess =
                         false,
                     )
@@ -2754,6 +2763,7 @@ abstract class Lezhin :
                         adult =
                         adult,
                     ),
+                    Fetch.DOCUMENT,
                     ensureSuccess =
                     false,
                 )
@@ -2778,6 +2788,7 @@ abstract class Lezhin :
                             adult =
                             adult,
                         ),
+                        Fetch.DOCUMENT,
                         ensureSuccess =
                         false,
                     )

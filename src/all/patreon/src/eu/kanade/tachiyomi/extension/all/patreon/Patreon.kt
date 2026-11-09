@@ -7,7 +7,6 @@ import androidx.preference.CheckBoxPreference
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -17,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.getPreferencesLazy
@@ -334,7 +334,7 @@ abstract class Patreon :
         return urls.toPages()
     }
 
-    override fun imageRequest(page: Page): Request {
+    override fun getImageRequest(page: Page): Request {
         val imageUrl = page.imageUrl!!
         val imageHost = imageUrl.toHttpUrlOrNull()?.host
 
@@ -352,7 +352,7 @@ abstract class Patreon :
             )
             .build()
 
-        return GET(imageUrl, imageHeaders)
+        return Request.Builder().url(imageUrl).headers(imageHeaders).build()
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -722,6 +722,7 @@ abstract class Patreon :
         val response = client.get(
             searchUrl,
             patreonHeaders(requireLogin = false),
+            Fetch.DOCUMENT,
             ensureSuccess = false,
         )
 
@@ -857,6 +858,7 @@ abstract class Patreon :
         val response = client.get(
             url,
             patreonHeaders(requireLogin = false),
+            Fetch.DOCUMENT,
             ensureSuccess = false,
         )
 
@@ -1019,6 +1021,7 @@ abstract class Patreon :
         val response = client.get(
             url,
             requestHeaders,
+            Fetch.DOCUMENT,
             ensureSuccess = false,
         )
 

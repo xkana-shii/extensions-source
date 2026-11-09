@@ -306,7 +306,7 @@ abstract class Kagane :
 
         val response = client.post(url, Fetch.XHR, body)
         val dto = response.parseAs<SearchDto>()
-        val mangas = dto.content.map { it.toSManga(apiUrl, showSource, sources) }
+        val mangas = dto.content.map { it.toSManga(apiUrl, showSource, sources, cleanTitle) }
         return MangasPage(mangas, hasNextPage = dto.hasNextPage())
     }
 
@@ -454,7 +454,7 @@ abstract class Kagane :
             .parseAs<TrackerDto>()
             .bookSeries
         return series
-            .map { it.toSManga(apiUrl, showSource, sources) }
+            .map { it.toSManga(apiUrl, showSource, sources, cleanTitle) }
     }
 
     // =============================== Pages ================================
