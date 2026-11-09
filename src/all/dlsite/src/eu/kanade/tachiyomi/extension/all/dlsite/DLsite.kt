@@ -1,6 +1,10 @@
 package eu.kanade.tachiyomi.extension.all.dlsite
 
+import android.text.InputType
+import androidx.preference.EditTextPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.HttpException
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -19,6 +23,7 @@ import keiyoushi.utils.attrOrNull
 import keiyoushi.utils.decodeHex
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getArray
+import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.getString
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.string
@@ -40,6 +45,7 @@ import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.CacheControl
+import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -54,11 +60,16 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 @Source
-abstract class DLsite : KeiSource() {
+abstract class DLsite :
+    KeiSource(),
+    ConfigurableSource {
+
+    private val preferences by getPreferencesLazy()
 
     private val language get() = LANGUAGES.getValue(lang)
 
     private val sessionMutex = Mutex()
+    private val loginMutex = Mutex()
     private var viewerSession: ViewerSession? = null
     private var playSession: PlaySession? = null
 
@@ -129,9 +140,44 @@ abstract class DLsite : KeiSource() {
 
     private val isLoggedIn get() = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == LOGIN_COOKIE }
 
+    // Logs in with the account from the settings when the WebView session is missing or has expired
+    private suspend fun ensureLoggedIn(): Boolean = isLoggedIn || login()
+
+    private suspend fun login(): Boolean = loginMutex.withLock {
+        if (isLoggedIn) return@withLock true
+        val id = preferences.getString(LOGIN_ID_PREF, "").orEmpty()
+        val password = preferences.getString(LOGIN_PASSWORD_PREF, "").orEmpty()
+        if (id.isBlank() || password.isBlank()) return@withLock false
+
+        val token = client.get(LOGIN_URL, Fetch.DOCUMENT).asJsoup().selectFirst("input[name=_token]")?.attr("value") ?: return@withLock false
+        val form = FormBody.Builder()
+            .add("_token", token)
+            .add("login_id", id)
+            .add("password", password)
+            .build()
+        client.post(LOGIN_URL, Fetch.DOCUMENT.from(LOGIN_URL), form, ensureSuccess = false).close()
+        // The store only gets its own cookie once it has been visited
+        if (!isLoggedIn) client.get("$baseUrl/", Fetch.DOCUMENT, ensureSuccess = false).close()
+        isLoggedIn
+    }
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        EditTextPreference(screen.context).apply {
+            key = LOGIN_ID_PREF
+            title = "DLsite ID"
+            summary = "Logs in automatically to show your library"
+        }.let(screen::addPreference)
+        EditTextPreference(screen.context).apply {
+            key = LOGIN_PASSWORD_PREF
+            title = "Password"
+            summary = "Password of the DLsite account"
+            setOnBindEditTextListener { it.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        }.let(screen::addPreference)
+    }
+
     // The works the logged-in account owns
     private suspend fun ownedWorknos(): List<String> {
-        if (!isLoggedIn) throw Exception(LOGIN_MESSAGE)
+        if (!ensureLoggedIn()) throw Exception(LOGIN_MESSAGE)
         owned?.takeIf { Clock.System.now() - it.fetchedAt < OWNED_CACHE }?.let { return it.worknos }
         val worknos = sales() ?: authorize().let { sales() } ?: throw Exception(LOGIN_MESSAGE)
         owned = OwnedWorks(worknos, Clock.System.now())
@@ -227,7 +273,7 @@ abstract class DLsite : KeiSource() {
     // The whole work, when the account owns it: the purchase archive's originals, or DLsite Play's pages for works it only
     // serves there and downloads that aren't a single archive of images
     private suspend fun ownedChapters(product: ProductDto): List<SChapter> {
-        if (!isLoggedIn || product.workno !in ownedWorknos()) return emptyList()
+        if (!ensureLoggedIn() || product.workno !in ownedWorknos()) return emptyList()
         val work = libraryWorks(listOf(product.workno)).single()
         // DLsite Play's DRM viewer, not readable here yet
         if (work.playEncodeType?.startsWith("link_u") == true) return emptyList()
@@ -447,7 +493,10 @@ abstract class DLsite : KeiSource() {
         private const val PLAY = "play"
         private const val LIBRARY_BATCH = 1000
         private const val LOGIN_COOKIE = "dlloginjp"
-        private const val LOGIN_MESSAGE = "Log in to DLsite in WebView to see your library"
+        private const val LOGIN_URL = "https://login.dlsite.com/login"
+        private const val LOGIN_ID_PREF = "login_id"
+        private const val LOGIN_PASSWORD_PREF = "login_password"
+        private const val LOGIN_MESSAGE = "Log in to DLsite in WebView, or enter your account in the settings, to see your library"
         private const val REFRESH_MESSAGE = "Refresh the chapter list"
         private val OWNED_CACHE = 5.minutes
         private val SAMPLE_MEDIA_TYPE = "image/webp".toMediaType()
