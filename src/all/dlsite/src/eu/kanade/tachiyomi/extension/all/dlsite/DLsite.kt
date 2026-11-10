@@ -86,7 +86,7 @@ abstract class DLsite :
             },
         )
 
-    override suspend fun getPopularManga(page: Int) = getSearchMangaList(page, "", FilterList())
+    override suspend fun getPopularManga(page: Int) = getSearchMangaList(page, "", FilterList(SectionFilter()))
 
     override suspend fun getLatestUpdates(page: Int) = getSearchMangaList(page, "", SortFilter.LATEST)
 

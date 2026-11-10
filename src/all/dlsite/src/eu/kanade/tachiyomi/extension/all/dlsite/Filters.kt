@@ -29,11 +29,11 @@ class GenreFilter(genres: List<GenreOption>) : OptionGroupFilter("Genres (works 
 
 // The maniax search also covers the adult books (BJ works)
 private val SECTIONS = listOf(
+    "My library (log in via WebView or the settings)" to DLsite.LIBRARY_SECTION,
     "Doujin and Adult Comics (R18)" to "maniax",
     "All Ages" to "home",
     "Otome (R18)" to "girls",
     "BL (R18)" to "bl",
-    "My library (log in via WebView)" to DLsite.LIBRARY_SECTION,
 )
 
 // None checked means both, like the lists
